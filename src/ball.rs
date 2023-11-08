@@ -10,6 +10,7 @@ use bevy::prelude::{
     App,
     Commands,
     // Entity,
+    EventReader,
     Plugin,
     Res,
     Resource,
@@ -25,12 +26,15 @@ use bevy::prelude::{
     // With,
 };
 use bevy_rapier2d::prelude::{
-    // ActiveEvents,
+    ActiveEvents,
     Collider,
+    ContactForceEvent,
     ColliderMassProperties,
+    ImpulseJoint,
+    RigidBody,
+    RevoluteJointBuilder,
     Velocity,
 };
-use bevy_rapier2d::dynamics::RigidBody;
 
 use crate::shared_consts::{
     PIXELS_PER_METER,
@@ -41,19 +45,6 @@ use crate::shared_consts::{
 struct NewBallsTimer(pub Timer);
 
 const BALL_RADIUS: f32 = 0.03 * PIXELS_PER_METER;
-
-// fn detect_exits(
-//     mut commands: Commands, 
-//     query: Query<(Entity, &Transform), With<Collider>>
-
-// ) {
-//     for (entity, position) in query.iter() {
-//         if position.translation.y < GROUND_POSITION {
-//             println!("Removing");
-//             commands.entity(entity).despawn();
-//         }
-//     }
-// }
 
 fn add_balls(
     time: Res<Time>,
@@ -87,16 +78,31 @@ fn add_balls(
                     ),
                     angvel: 0.0,
                 },
-                // ActiveEvents::COLLISION_EVENTS,
+                ActiveEvents::CONTACT_FORCE_EVENTS,
                 // Sleeping::disabled(),
                 // Ccd::enabled(),
             ));
     }
 }
 
-pub struct BallSourcePlugin;
+fn sticky(
+    mut commands: Commands,
+    mut contact_force_collisions: EventReader<ContactForceEvent>,
+) {
+    for ContactForceEvent{collider1, collider2, ..} in contact_force_collisions.iter() {
+        let joint = 
+            RevoluteJointBuilder::new()
+            .local_anchor1(Vec2::new(0.0, 0.0))
+            .local_anchor2(Vec2::new(0.0, 0.0))
+        ;
+        commands.entity(*collider1)
+            .insert(ImpulseJoint::new(*collider2, joint));
+    }
+}
 
-impl Plugin for BallSourcePlugin {
+pub struct BallPlugin;
+
+impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
         app
         .insert_resource(
@@ -106,7 +112,7 @@ impl Plugin for BallSourcePlugin {
             Update,
             (
                 add_balls,
-                // detect_exits,
+                sticky,
             ),
         );
     }

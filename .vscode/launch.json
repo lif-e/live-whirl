@@ -11,6 +11,7 @@
             "cargo": {
                 "args": [
                     "build",
+                    "--release",
                     "--bin=live-whirl",
                     "--package=live-whirl"
                 ],

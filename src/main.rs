@@ -1,11 +1,10 @@
-use bevy::prelude::App;
-use bevy::prelude::*;
+use bevy::prelude::{App, DefaultPlugins};
 
 mod shared_consts;
 mod setup;
-mod ball_source;
+mod ball;
 use crate::setup::SetupPlugin;
-use crate::ball_source::BallSourcePlugin;
+use crate::ball::BallPlugin;
 
 fn main() {
     App::new()
@@ -13,7 +12,7 @@ fn main() {
         DefaultPlugins,
 
         SetupPlugin,
-        BallSourcePlugin,
+        BallPlugin,
     ))
     .run();
 }
