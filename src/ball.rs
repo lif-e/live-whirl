@@ -91,7 +91,7 @@ fn add_balls(
                 MaterialMesh2dBundle {
                     mesh: meshes.add(Circle::new(BALL_RADIUS).into()).into(),
                     // 4. Put something bright in a dark environment to see the effect
-                    material: materials.add(ColorMaterial::from(Color::rgb(7.5, 0.0, 7.5))),
+                    material: materials.add(ColorMaterial::from(Color::hsl(0.0, 7.0, 0.5))),
                     transform: transform,
                     ..MaterialMesh2dBundle::default()
                 },

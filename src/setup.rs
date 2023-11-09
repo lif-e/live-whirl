@@ -30,10 +30,10 @@ use bevy::{
 };
 use bevy_rapier2d::prelude::{
     Collider,
-    DebugRenderMode,
+    // DebugRenderMode,
     NoUserData,
     RapierConfiguration,
-    RapierDebugRenderPlugin,
+    // RapierDebugRenderPlugin,
     RapierPhysicsPlugin,
 };
 
@@ -52,15 +52,15 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
             tonemapping: Tonemapping::TonyMcMapface, // 2. Using an HDR tonemapper that desaturates to white is recommended
             projection: OrthographicProjection {
                 near: -1000., // Camera2DBundle default that doesn't match OrthographicProjection default
-                scale: 5.5,
+                scale: 7.0,
                 ..OrthographicProjection::default()
             },
             ..Camera2dBundle::default()
         },
         BloomSettings {
             intensity: 0.27848008 / 4.0,
-            low_frequency_boost: 0.5019195,
-            low_frequency_boost_curvature: 1.0,
+            low_frequency_boost: 0.35, // 0.5019195,
+            low_frequency_boost_curvature: 0.91, // 1.0,
             high_pass_frequency: 1.0,
             composite_mode: BloomCompositeMode::EnergyConserving,
             prefilter_settings : BloomPrefilterSettings {
@@ -75,7 +75,7 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
 const WALL_HALFTHICKNESS: f32 = 0.1 * PIXELS_PER_METER;
 pub const WALLS_HALFHEIGHT: f32 = 5.0 * PIXELS_PER_METER;
 pub const GROUND_HALFWIDTH: f32 = 4.0 * PIXELS_PER_METER;
-pub const GROUND_POSITION: f32 = -4.5 * PIXELS_PER_METER;
+pub const GROUND_POSITION: f32 = -5.0 * PIXELS_PER_METER;
 
 pub fn setup_whirl(
     mut commands: Commands,
@@ -90,7 +90,7 @@ pub fn setup_whirl(
             .spawn(Collider::cuboid(size.x / 2.0, size.y / 2.0))
             .insert(MaterialMesh2dBundle {
                 mesh: meshes.add(Quad::new(size).into()).into(),
-                material: materials.add(ColorMaterial::from(Color::hsl(180.0, 1.0, 0.5))),
+                material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
                 transform: Transform::from_xyz(position.x, position.y, 0.0),
                 ..MaterialMesh2dBundle::default()
             })
