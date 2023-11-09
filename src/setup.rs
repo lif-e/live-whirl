@@ -1,82 +1,133 @@
-use bevy::prelude::{
-    App,
-    // Camera,
-    Camera2dBundle,
-    Commands,
-    EventReader,
-    // Entity,
-    // OrthographicProjection,
-    Plugin,
-    // Query,
-    ResMut,
-    Startup,
-    Transform,
-    TransformBundle,
-    Update,
-    Vec2,
-    // With,
+use bevy::{
+    prelude::{
+        App,
+        Assets,
+        Camera,
+        Camera2dBundle,
+        Color,
+        Commands,
+        Mesh,
+        OrthographicProjection,
+        Plugin,
+        ResMut,
+        shape::Quad,
+        Startup,
+        Transform,
+        Vec2,
+    },
+    core_pipeline::{
+        bloom::{
+            BloomCompositeMode,
+            BloomPrefilterSettings,
+            BloomSettings,
+        },
+        tonemapping::Tonemapping,
+    },
+    sprite::{
+        ColorMaterial,
+        MaterialMesh2dBundle,
+    },
 };
-use bevy_rapier2d::{prelude::{
-    ActiveEvents,
+use bevy_rapier2d::prelude::{
     Collider,
-    CollisionEvent,
-    // ContactForceEventThreshold,
     DebugRenderMode,
     NoUserData,
     RapierConfiguration,
     RapierDebugRenderPlugin,
     RapierPhysicsPlugin,
-    // Restitution,
-    Sensor,
-}, rapier::prelude::CollisionEventFlags};
+};
 
-use crate::shared_consts::{PIXELS_PER_METER, GROUND_POSITION};
+use crate::shared_consts::PIXELS_PER_METER;
+use crate::ball::BALL_RADIUS;
 
 pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
-    rapier_config.gravity = Vec2::new(0.0, -520.0);
-    // rapier_config.gravity = Vec2::new(0.0, 0.0);
+    rapier_config.gravity = Vec2::new(0.0, 0.0);
 
-    // Add a camera so we can see the debug-render.
-    let mut camera_bundle: Camera2dBundle = Camera2dBundle::default();
-    camera_bundle.projection.scale = 5.0;
-    commands.spawn(camera_bundle);
-}
-
-const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
-const WALLS_HEIGHT: f32 = 5.0 * PIXELS_PER_METER;
-const GROUND_WIDTH: f32 = 4.0 * PIXELS_PER_METER;
-// const WALL_BOUNCINESS: f32 = 0.90;
-
-pub fn setup_whirl(mut commands: Commands) {
-    println!("Setting up whirl");
-    /* Create the ground. */
-    commands
-        .spawn(Collider::cuboid(GROUND_WIDTH, WALL_THICKNESS))
-        .insert(TransformBundle::from(Transform::from_xyz(0.0, GROUND_POSITION, 0.0)));
-    commands
-        .spawn(Collider::cuboid(WALL_THICKNESS, WALLS_HEIGHT))
-        .insert(TransformBundle::from(Transform::from_xyz(-1.0 * GROUND_WIDTH, WALLS_HEIGHT + GROUND_POSITION, 0.0)));
-    commands
-        .spawn(Collider::cuboid(WALL_THICKNESS, WALLS_HEIGHT))
-        .insert(TransformBundle::from(Transform::from_xyz(GROUND_WIDTH, WALLS_HEIGHT + GROUND_POSITION, 0.0)));
-    commands
-        .spawn(Collider::cuboid(GROUND_WIDTH, WALL_THICKNESS))
-        .insert(Sensor)
-        .insert(TransformBundle::from(Transform::from_xyz(0.0, 2.0 * WALLS_HEIGHT + GROUND_POSITION, 0.0)))
-        .insert(ActiveEvents::COLLISION_EVENTS)
-        ;
-}
-
-fn vent_collisions(
-    mut commands: Commands,
-    mut collision_events: EventReader<CollisionEvent>,
-) {
-    for collision_event in collision_events.iter() {
-        match collision_event {
-            CollisionEvent::Started(_, collider2, CollisionEventFlags::SENSOR) => {
-                commands.entity(*collider2).despawn();
+    commands.spawn((
+        Camera2dBundle {
+            camera: Camera {
+                hdr: true, // 1. HDR is required for bloom
+                ..Camera::default()
             },
-            _ => (),
+            tonemapping: Tonemapping::TonyMcMapface, // 2. Using a tonemapper that desaturates to white is recommended
+            projection: OrthographicProjection {
+                scale: 1.0,
+                ..OrthographicProjection::default()
+            },
+            ..Camera2dBundle::default()
+        },
+        BloomSettings {
+            intensity: 0.27848008 / 2.0,
+            low_frequency_boost: 0.5019195,
+            low_frequency_boost_curvature: 1.0,
+            high_pass_frequency: 1.0,
+            composite_mode: BloomCompositeMode::EnergyConserving,
+            prefilter_settings : BloomPrefilterSettings {
+                threshold: 0.0,
+                threshold_softness: 0.0,
+            },
+            ..BloomSettings::default()
+        },
+    ));
+}
+
+const WALL_HALFTHICKNESS: f32 = 0.1 * PIXELS_PER_METER;
+pub const WALLS_HALFHEIGHT: f32 = 5.0 * PIXELS_PER_METER;
+pub const GROUND_HALFWIDTH: f32 = 4.0 * PIXELS_PER_METER;
+pub const GROUND_POSITION: f32 = -4.5 * PIXELS_PER_METER;
+
+pub fn setup_whirl(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let mut add_wall = |
+        size: Vec2,
+        position: Vec2,
+    | {
+        commands
+            .spawn(Collider::cuboid(size.x / 2.0, size.y / 2.0))
+            .insert(MaterialMesh2dBundle {
+                mesh: meshes.add(Quad::new(size).into()).into(),
+                material: materials.add(ColorMaterial::from(Color::hsl(180.0, 1.0, 0.5))),
+                transform: Transform::from_xyz(position.x, position.y, 0.0),
+                ..MaterialMesh2dBundle::default()
+            })
+        ;
+    };
+    println!("Setting up whirl");
+    add_wall(
+        Vec2::new(GROUND_HALFWIDTH * 2.0, WALL_HALFTHICKNESS * 2.0),
+        Vec2::new(0.0, GROUND_POSITION),
+    );
+    add_wall(
+        Vec2::new(WALL_HALFTHICKNESS * 2.0, WALLS_HALFHEIGHT * 2.0),
+        Vec2::new(-1.0 * GROUND_HALFWIDTH, WALLS_HALFHEIGHT + GROUND_POSITION),
+    );
+    add_wall(
+        Vec2::new(WALL_HALFTHICKNESS * 2.0, WALLS_HALFHEIGHT * 2.0),
+        Vec2::new(GROUND_HALFWIDTH, WALLS_HALFHEIGHT + GROUND_POSITION),
+    );
+    add_wall(
+        Vec2::new(GROUND_HALFWIDTH * 2.0, WALL_HALFTHICKNESS * 2.0),
+        Vec2::new(0.0, 2.0 * WALLS_HALFHEIGHT + GROUND_POSITION),
+    );
+
+    const HORIZONTAL_SPACING: f32 = 0.5 * PIXELS_PER_METER;
+    const VERTICAL_SPACING: f32 = 0.5 * PIXELS_PER_METER;
+    const SPACED_WIDTH: i32 = ((GROUND_HALFWIDTH * 2.0) / HORIZONTAL_SPACING) as i32;
+    const SPACED_HEIGHT: i32 = ((WALLS_HALFHEIGHT * 2.0) / VERTICAL_SPACING) as i32;
+
+    for i in 0..SPACED_WIDTH {
+        let x = (i as f32 * HORIZONTAL_SPACING) - GROUND_HALFWIDTH;
+        for j in 1..SPACED_HEIGHT {
+            let y = j as f32 * VERTICAL_SPACING + GROUND_POSITION;
+            let row_shift: f32 = if j % 2 == 1 { 0.0 } else { HORIZONTAL_SPACING / 2.0 };
+            if i == 0 && row_shift == 0.0 { continue; }
+            add_wall(
+                Vec2::new(BALL_RADIUS, BALL_RADIUS),
+                Vec2::new(x + row_shift, y),
+            );
         }
     }
 }
@@ -107,12 +158,6 @@ impl Plugin for SetupPlugin {
             (
                 setup_graphics,
                 setup_whirl,
-            ),
-        )
-        .add_systems(
-            Update,
-            (
-                vent_collisions,
             ),
         )
         ;

@@ -1,4 +1,7 @@
-use bevy::prelude::{App, DefaultPlugins};
+use bevy::prelude::{
+    App,
+    DefaultPlugins,
+};
 
 mod shared_consts;
 mod setup;

@@ -8,6 +8,9 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug executable 'live-whirl'",
+            "env": {
+                "RUST_BACKTRACE": "full"
+            },
             "cargo": {
                 "args": [
                     "build",
@@ -27,6 +30,9 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug unit tests in executable 'live-whirl'",
+            "env": {
+                "RUST_BACKTRACE": "full"
+            },
             "cargo": {
                 "args": [
                     "test",
