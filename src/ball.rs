@@ -22,7 +22,6 @@ use bevy::{
         Timer,
         TimerMode,
         Transform,
-        // TransformBundle,
         Update,
         Vec2,
         shape::Circle,

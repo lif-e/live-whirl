@@ -49,15 +49,16 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
                 hdr: true, // 1. HDR is required for bloom
                 ..Camera::default()
             },
-            tonemapping: Tonemapping::TonyMcMapface, // 2. Using a tonemapper that desaturates to white is recommended
+            tonemapping: Tonemapping::TonyMcMapface, // 2. Using an HDR tonemapper that desaturates to white is recommended
             projection: OrthographicProjection {
-                scale: 1.0,
+                near: -1000., // Camera2DBundle default that doesn't match OrthographicProjection default
+                scale: 5.5,
                 ..OrthographicProjection::default()
             },
             ..Camera2dBundle::default()
         },
         BloomSettings {
-            intensity: 0.27848008 / 2.0,
+            intensity: 0.27848008 / 4.0,
             low_frequency_boost: 0.5019195,
             low_frequency_boost_curvature: 1.0,
             high_pass_frequency: 1.0,
@@ -139,19 +140,19 @@ impl Plugin for SetupPlugin {
         app
         .add_plugins((
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(PIXELS_PER_METER),
-            RapierDebugRenderPlugin {
-                mode: (
-                    DebugRenderMode::COLLIDER_SHAPES
-                    // | DebugRenderMode::RIGID_BODY_AXES
-                    // | DebugRenderMode::MULTIBODY_JOINTS
-                    // | DebugRenderMode::IMPULSE_JOINTS
-                    // | DebugRenderMode::JOINTS
-                    // | DebugRenderMode::COLLIDER_AABBS
-                    // | DebugRenderMode::SOLVER_CONTACTS
-                    // | DebugRenderMode::CONTACTS
-                ),
-                ..RapierDebugRenderPlugin::default()
-            },
+            // RapierDebugRenderPlugin {
+            //     mode: (
+            //         DebugRenderMode::COLLIDER_SHAPES
+            //         // | DebugRenderMode::RIGID_BODY_AXES
+            //         // | DebugRenderMode::MULTIBODY_JOINTS
+            //         // | DebugRenderMode::IMPULSE_JOINTS
+            //         // | DebugRenderMode::JOINTS
+            //         // | DebugRenderMode::COLLIDER_AABBS
+            //         // | DebugRenderMode::SOLVER_CONTACTS
+            //         // | DebugRenderMode::CONTACTS
+            //     ),
+            //     ..RapierDebugRenderPlugin::default()
+            // },
         ))
         .add_systems(
             Startup,
