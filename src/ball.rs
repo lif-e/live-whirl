@@ -10,47 +10,76 @@ use bevy::{
     prelude::{
         App,
         Assets,
+        BuildChildren,
+        Children,
         Color,
         Commands,
+        Entity,
         EventReader,
         Mesh,
         Plugin,
+        Query,
         Res,
-        Resource,
         ResMut,
+        Resource,
+        shape::{
+            Circle,
+            Box,
+        },
         Time,
         Timer,
         TimerMode,
         Transform,
         Update,
         Vec2,
-        shape::Circle,
     },
     sprite::{
-        MaterialMesh2dBundle,
         ColorMaterial,
-    }
+        MaterialMesh2dBundle,
+    },
 };
 use bevy_rapier2d::prelude::{
     ActiveEvents,
     Collider,
-    ContactForceEvent,
     ColliderMassProperties,
+    ContactForceEvent,
+    Friction,
     ImpulseJoint,
-    RigidBody,
     RevoluteJointBuilder,
+    RigidBody,
     Velocity,
+    RapierContext,
+    Restitution,
+    RapierImpulseJointHandle,
 };
 
-use crate::shared_consts::PIXELS_PER_METER;
-
-use crate::setup::{GROUND_HALFWIDTH, WALLS_HALFHEIGHT, GROUND_POSITION};
+use crate::{
+    shared_consts::PIXELS_PER_METER,
+    setup::{
+        GROUND_WIDTH,
+        WALL_THICKNESS,
+        WALL_HEIGHT,
+    },
+};
 
 pub const BALL_RADIUS: f32 = 0.03 * PIXELS_PER_METER;
 
 #[derive(Resource)]
 struct NewBallsTimer(pub Timer);
 
+const SPAWN_BOX: Box = Box {
+    min_x: (-0.5 * GROUND_WIDTH) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
+    max_x: ( 0.5 * GROUND_WIDTH) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
+    min_y: (-0.5 *  WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
+    max_y: ( 0.5 *  WALL_HEIGHT) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
+    min_z: 0.0,
+    max_z: 0.0,
+};
+
+const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
+const MAX_LINEAR_VELOCITY: Vec2 = Vec2::new( 1.0,  1.0);
+
+const STICKY_BREAKING_FORCE: f32 = 0.0000025;
 
 fn add_balls(
     time: Res<Time>,
@@ -62,55 +91,115 @@ fn add_balls(
     // let mut rng = StdRng::seed_from_u64(42);
     let mut rng = thread_rng();
 
+    let linearvelocity: Vec2 = Vec2::new(
+        rng.gen_range(MIN_LINEAR_VELOCITY.x, MAX_LINEAR_VELOCITY.x),
+        rng.gen_range(MIN_LINEAR_VELOCITY.y, MAX_LINEAR_VELOCITY.y),
+    );
+    let max_linear_magnitude: f32 = MAX_LINEAR_VELOCITY.length().abs().max(MAX_LINEAR_VELOCITY.length().abs());
+    let magnitude: f32 = linearvelocity.length().abs();
+
     // update our timer with the time elapsed since the last update
     // if that caused the timer to finish, we say hello to everyone
     if timer.0.tick(time.delta()).just_finished() {
-        let transform = Transform::from_xyz(
-            rng.gen_range(-1.0 * GROUND_HALFWIDTH, GROUND_HALFWIDTH),
-            rng.gen_range(GROUND_POSITION, GROUND_POSITION + (2.0 * WALLS_HALFHEIGHT)),
-            0.0,
-        );
         commands
             .spawn((
                 RigidBody::Dynamic,
                 Collider::ball(BALL_RADIUS),
-                ColliderMassProperties::Density(0.01),
-                // Friction::coefficient(0.7),
+                ColliderMassProperties::Density(0.001),
+                Friction::coefficient(0.7),
                 Velocity {
-                    linvel: Vec2::new(
-                        rng.gen_range(-1.0, 1.0) * PIXELS_PER_METER,
-                        rng.gen_range( 1.0, 3.5) * PIXELS_PER_METER,
-                    ),
+                    linvel: linearvelocity * PIXELS_PER_METER,
                     angvel: 0.0,
                 },
                 ActiveEvents::CONTACT_FORCE_EVENTS,
-                // Sleeping::disabled(),
                 // Ccd::enabled(),
+                Restitution::new(0.1),
                 
-                // TransformBundle::from(transform),
                 MaterialMesh2dBundle {
                     mesh: meshes.add(Circle::new(BALL_RADIUS).into()).into(),
                     // 4. Put something bright in a dark environment to see the effect
-                    material: materials.add(ColorMaterial::from(Color::hsl(0.0, 7.0, 0.5))),
-                    transform: transform,
+                    material: materials.add(ColorMaterial::from(
+                        Color::hsl(
+                            rng.gen_range(0.0, 360.0),
+                            ((magnitude / max_linear_magnitude) * 10.0) + (0.90 - 0.11),
+                            0.5,
+                        )
+                    )),
+                    transform: Transform::from_xyz(
+                        rng.gen_range(SPAWN_BOX.min_x, SPAWN_BOX.max_x),
+                        rng.gen_range(SPAWN_BOX.min_y, SPAWN_BOX.max_y),
+                        0.0,
+                    ),
                     ..MaterialMesh2dBundle::default()
                 },
             ));
     }
 }
 
+const MAX_JOINTS: usize = 10;
+const JOINT_DISTANCE: f32 = BALL_RADIUS * 0.05;
+
 fn sticky(
     mut commands: Commands,
+    rapier_context: Res<RapierContext>,
     mut contact_force_collisions: EventReader<ContactForceEvent>,
+    parent_entities: Query<(Entity, &Children)>,
 ) {
-    for ContactForceEvent{collider1, collider2, ..} in contact_force_collisions.iter() {
-        let joint = 
-            RevoluteJointBuilder::new()
-            .local_anchor1(Vec2::new(0.0, 0.0))
-            .local_anchor2(Vec2::new(0.0, 0.0))
-        ;
-        commands.entity(*collider1)
-            .insert(ImpulseJoint::new(*collider2, joint));
+    for ContactForceEvent{collider1, collider2, total_force_magnitude, ..} in contact_force_collisions.iter() {
+        if *total_force_magnitude > STICKY_BREAKING_FORCE { continue; }
+        if let Some(contact_pair) = rapier_context.contact_pair(*collider1, *collider2) {
+            // The contact pair exists meaning that the broad-phase identified a potential contact.
+            if contact_pair.has_any_active_contacts() {
+                // There's only ever really one contact manifold for pure circles.
+                for manifold in contact_pair.manifolds() {
+                    // There's only ever really one point pair for pure circles.
+                    for contact_point in manifold.points() {
+                        // Keep in mind that all the geometric contact data are expressed in the local-space of the colliders.
+                        let e1_sticky_point: Vec2 = contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
+                        let e2_sticky_point: Vec2 = contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
+                        if let Ok(c1_children) = parent_entities.get_component::<Children>(*collider1) {
+                            if c1_children.len() > MAX_JOINTS { continue;}
+                        } else if let Ok(c2_children) = parent_entities.get_component::<Children>(*collider2) {
+                            if c2_children.len() > MAX_JOINTS { continue; }
+                        }
+
+                        // joint.set_contacts_enabled(false);
+                        commands
+                            .entity(*collider2)
+                            .with_children(|children| {
+                                children
+                                    .spawn(ImpulseJoint::new(
+                                        *collider1,
+                                        RevoluteJointBuilder::new()
+                                            .local_anchor1(e1_sticky_point)
+                                            .local_anchor2(e2_sticky_point)
+                                            .build(),
+                                    ))
+                                ;
+                            })
+                        ;
+                    }
+                }
+            }
+    
+        }
+    }
+}
+
+fn unstick(
+    mut commands: Commands,
+    mut context: ResMut<RapierContext>,
+    mut joints: Query<(Entity, &RapierImpulseJointHandle)>,
+) {
+    for (joint_entity, rapier_joint_handle) in joints.iter_mut() {
+        if let Some(rapier_joint) = context.impulse_joints.get_mut(rapier_joint_handle.0) {
+            for impulse in rapier_joint.impulses.column_iter() {
+                let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
+                if impulse_magnitude > STICKY_BREAKING_FORCE {
+                    commands.entity(joint_entity).despawn();
+                }
+            }
+        }
     }
 }
 
@@ -127,6 +216,7 @@ impl Plugin for BallPlugin {
             (
                 add_balls,
                 sticky,
+                unstick,
             ),
         );
     }

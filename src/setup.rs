@@ -10,7 +10,10 @@ use bevy::{
         OrthographicProjection,
         Plugin,
         ResMut,
-        shape::Quad,
+        shape::{
+            Quad,
+            Box,
+        },
         Startup,
         Transform,
         Vec2,
@@ -41,7 +44,7 @@ use crate::shared_consts::PIXELS_PER_METER;
 use crate::ball::BALL_RADIUS;
 
 pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
-    rapier_config.gravity = Vec2::new(0.0, 0.0);
+    rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
 
     commands.spawn((
         Camera2dBundle {
@@ -52,7 +55,7 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
             tonemapping: Tonemapping::TonyMcMapface, // 2. Using an HDR tonemapper that desaturates to white is recommended
             projection: OrthographicProjection {
                 near: -1000., // Camera2DBundle default that doesn't match OrthographicProjection default
-                scale: 7.0,
+                scale: 6.0,
                 ..OrthographicProjection::default()
             },
             ..Camera2dBundle::default()
@@ -72,10 +75,20 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
     ));
 }
 
-const WALL_HALFTHICKNESS: f32 = 0.1 * PIXELS_PER_METER;
-pub const WALLS_HALFHEIGHT: f32 = 5.0 * PIXELS_PER_METER;
-pub const GROUND_HALFWIDTH: f32 = 4.0 * PIXELS_PER_METER;
-pub const GROUND_POSITION: f32 = -5.0 * PIXELS_PER_METER;
+pub const WALL_HEIGHT: f32 = 10.0 * PIXELS_PER_METER;
+pub const GROUND_WIDTH: f32 = 8.0 * PIXELS_PER_METER;
+pub const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
+
+const GROUND_POSITION: f32 = -0.5 * WALL_HEIGHT;
+
+const WALL_BOX: Box = Box {
+    min_x: -0.5 * GROUND_WIDTH,
+    max_x:  0.5 * GROUND_WIDTH,
+    min_y: GROUND_POSITION,
+    max_y: WALL_HEIGHT + GROUND_POSITION,
+    min_z: 0.0,
+    max_z: 0.0,
+};
 
 pub fn setup_whirl(
     mut commands: Commands,
@@ -97,30 +110,32 @@ pub fn setup_whirl(
         ;
     };
     println!("Setting up whirl");
+    const VERTICAL_WALLS_SIZE: Vec2 = Vec2::new(WALL_BOX.max_x - WALL_BOX.min_x, WALL_THICKNESS);
+    const HORIZONTAL_WALLS_SIZE: Vec2 = Vec2::new(WALL_THICKNESS, WALL_BOX.max_y - WALL_BOX.min_y);
     add_wall(
-        Vec2::new(GROUND_HALFWIDTH * 2.0, WALL_HALFTHICKNESS * 2.0),
-        Vec2::new(0.0, GROUND_POSITION),
+        VERTICAL_WALLS_SIZE,
+        Vec2 { x: 0.0, y: WALL_BOX.min_y },
     );
     add_wall(
-        Vec2::new(WALL_HALFTHICKNESS * 2.0, WALLS_HALFHEIGHT * 2.0),
-        Vec2::new(-1.0 * GROUND_HALFWIDTH, WALLS_HALFHEIGHT + GROUND_POSITION),
+        VERTICAL_WALLS_SIZE,
+        Vec2::new(0.0, WALL_BOX.max_y),
     );
     add_wall(
-        Vec2::new(WALL_HALFTHICKNESS * 2.0, WALLS_HALFHEIGHT * 2.0),
-        Vec2::new(GROUND_HALFWIDTH, WALLS_HALFHEIGHT + GROUND_POSITION),
+        HORIZONTAL_WALLS_SIZE,
+        Vec2::new(WALL_BOX.min_x, 0.0),
     );
     add_wall(
-        Vec2::new(GROUND_HALFWIDTH * 2.0, WALL_HALFTHICKNESS * 2.0),
-        Vec2::new(0.0, 2.0 * WALLS_HALFHEIGHT + GROUND_POSITION),
+        HORIZONTAL_WALLS_SIZE,
+        Vec2::new(WALL_BOX.max_x, 0.0),
     );
 
     const HORIZONTAL_SPACING: f32 = 0.5 * PIXELS_PER_METER;
     const VERTICAL_SPACING: f32 = 0.5 * PIXELS_PER_METER;
-    const SPACED_WIDTH: i32 = ((GROUND_HALFWIDTH * 2.0) / HORIZONTAL_SPACING) as i32;
-    const SPACED_HEIGHT: i32 = ((WALLS_HALFHEIGHT * 2.0) / VERTICAL_SPACING) as i32;
+    const SPACED_WIDTH: i32 = (GROUND_WIDTH / HORIZONTAL_SPACING) as i32;
+    const SPACED_HEIGHT: i32 = (WALL_HEIGHT / VERTICAL_SPACING) as i32;
 
     for i in 0..SPACED_WIDTH {
-        let x = (i as f32 * HORIZONTAL_SPACING) - GROUND_HALFWIDTH;
+        let x = (i as f32 * HORIZONTAL_SPACING) - (0.5 * GROUND_WIDTH);
         for j in 1..SPACED_HEIGHT {
             let y = j as f32 * VERTICAL_SPACING + GROUND_POSITION;
             let row_shift: f32 = if j % 2 == 1 { 0.0 } else { HORIZONTAL_SPACING / 2.0 };
@@ -145,7 +160,7 @@ impl Plugin for SetupPlugin {
             //         DebugRenderMode::COLLIDER_SHAPES
             //         // | DebugRenderMode::RIGID_BODY_AXES
             //         // | DebugRenderMode::MULTIBODY_JOINTS
-            //         // | DebugRenderMode::IMPULSE_JOINTS
+            //         | DebugRenderMode::IMPULSE_JOINTS
             //         // | DebugRenderMode::JOINTS
             //         // | DebugRenderMode::COLLIDER_AABBS
             //         // | DebugRenderMode::SOLVER_CONTACTS
