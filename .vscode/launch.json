@@ -25,28 +25,6 @@
             },
             "args": [],
             "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug unit tests in executable 'live-whirl'",
-            "env": {
-                "RUST_BACKTRACE": "full"
-            },
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--bin=live-whirl",
-                    "--package=live-whirl"
-                ],
-                "filter": {
-                    "name": "live-whirl",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
         }
     ]
 }
