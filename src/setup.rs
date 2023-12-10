@@ -10,6 +10,7 @@ use bevy::{
         OrthographicProjection,
         Plugin,
         ResMut,
+        Resource,
         shape::{
             Quad,
             Box,
@@ -33,15 +34,24 @@ use bevy::{
 };
 use bevy_rapier2d::prelude::{
     Collider,
-    // DebugRenderMode,
+    DebugRenderMode,
     NoUserData,
     RapierConfiguration,
-    // RapierDebugRenderPlugin,
+    RapierDebugRenderPlugin,
     RapierPhysicsPlugin,
+};
+use rand::{
+    rngs::StdRng,
+    SeedableRng,
 };
 
 use crate::shared_consts::PIXELS_PER_METER;
 use crate::ball::BALL_RADIUS;
+
+#[derive(Resource)]
+pub struct RngResource {
+    pub rng: StdRng,
+}
 
 pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
     rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
@@ -153,21 +163,24 @@ pub struct SetupPlugin;
 impl Plugin for SetupPlugin {
     fn build(&self, app: &mut App) {
         app
+        .insert_resource(RngResource {
+            rng: StdRng::seed_from_u64(42),
+        })
         .add_plugins((
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(PIXELS_PER_METER),
-            // RapierDebugRenderPlugin {
-            //     mode: (
-            //         DebugRenderMode::COLLIDER_SHAPES
-            //         // | DebugRenderMode::RIGID_BODY_AXES
-            //         // | DebugRenderMode::MULTIBODY_JOINTS
-            //         | DebugRenderMode::IMPULSE_JOINTS
-            //         // | DebugRenderMode::JOINTS
-            //         // | DebugRenderMode::COLLIDER_AABBS
-            //         // | DebugRenderMode::SOLVER_CONTACTS
-            //         // | DebugRenderMode::CONTACTS
-            //     ),
-            //     ..RapierDebugRenderPlugin::default()
-            // },
+            RapierDebugRenderPlugin {
+                mode: (
+                    DebugRenderMode::COLLIDER_SHAPES
+                    // | DebugRenderMode::RIGID_BODY_AXES
+                    // | DebugRenderMode::MULTIBODY_JOINTS
+                    | DebugRenderMode::IMPULSE_JOINTS
+                    // | DebugRenderMode::JOINTS
+                    // | DebugRenderMode::COLLIDER_AABBS
+                    // | DebugRenderMode::SOLVER_CONTACTS
+                    // | DebugRenderMode::CONTACTS
+                ),
+                ..RapierDebugRenderPlugin::default()
+            },
         ))
         .add_systems(
             Startup,
