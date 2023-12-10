@@ -6,6 +6,7 @@ use bevy::{
         Camera2dBundle,
         Color,
         Commands,
+        Component,
         Mesh,
         OrthographicProjection,
         Plugin,
@@ -100,6 +101,24 @@ const WALL_BOX: Box = Box {
     max_z: 0.0,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
+pub struct Wall;
+
+impl Default for Wall {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
+pub struct Peg;
+
+impl Default for Peg {
+    fn default() -> Self {
+        Self
+    }
+}
+
 pub fn setup_whirl(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -110,14 +129,16 @@ pub fn setup_whirl(
         position: Vec2,
     | {
         commands
-            .spawn(Collider::cuboid(size.x / 2.0, size.y / 2.0))
-            .insert(MaterialMesh2dBundle {
-                mesh: meshes.add(Quad::new(size).into()).into(),
-                material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
-                transform: Transform::from_xyz(position.x, position.y, 0.0),
-                ..MaterialMesh2dBundle::default()
-            })
-        ;
+            .spawn((
+                Wall::default(),
+                Collider::cuboid(size.x / 2.0, size.y / 2.0),
+                MaterialMesh2dBundle {
+                    mesh: meshes.add(Quad::new(size).into()).into(),
+                    material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
+                    transform: Transform::from_xyz(position.x, position.y, 0.0),
+                    ..MaterialMesh2dBundle::default()
+                },
+            ));
     };
     println!("Setting up whirl");
     const VERTICAL_WALLS_SIZE: Vec2 = Vec2::new(WALL_BOX.max_x - WALL_BOX.min_x, WALL_THICKNESS);
@@ -150,10 +171,19 @@ pub fn setup_whirl(
             let y = j as f32 * VERTICAL_SPACING + GROUND_POSITION;
             let row_shift: f32 = if j % 2 == 1 { 0.0 } else { HORIZONTAL_SPACING / 2.0 };
             if i == 0 && row_shift == 0.0 { continue; }
-            add_wall(
-                Vec2::new(BALL_RADIUS, BALL_RADIUS),
-                Vec2::new(x + row_shift, y),
-            );
+            let size = Vec2::new(BALL_RADIUS, BALL_RADIUS);
+            let position = Vec2::new(x + row_shift, y);
+            commands
+                .spawn((
+                    Peg::default(),
+                    Collider::cuboid(size.x / 2.0, size.y / 2.0),
+                    MaterialMesh2dBundle {
+                        mesh: meshes.add(Quad::new(size).into()).into(),
+                        material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
+                        transform: Transform::from_xyz(position.x, position.y, 0.0),
+                        ..MaterialMesh2dBundle::default()
+                    },
+                ));
         }
     }
 }

@@ -2,7 +2,6 @@ use rand::{
     Rng,
     // rngs::StdRng,
     // SeedableRng,
-    seq::IteratorRandom,
 };
 
 use bevy::{
@@ -13,6 +12,8 @@ use bevy::{
         Children,
         Color,
         Commands,
+        Component,
+        DespawnRecursiveExt,
         Entity,
         EventReader,
         Mesh,
@@ -22,8 +23,8 @@ use bevy::{
         ResMut,
         Resource,
         shape::{
-            Circle,
             Box,
+            Circle,
         },
         Time,
         Timer,
@@ -31,13 +32,13 @@ use bevy::{
         Transform,
         Update,
         Vec2,
-        Component,
+        With,
         World,
     },
     sprite::{
         ColorMaterial,
         MaterialMesh2dBundle,
-    }, hierarchy::Parent,
+    },
 };
 use bevy_rapier2d::prelude::{
     ActiveEvents,
@@ -52,7 +53,6 @@ use bevy_rapier2d::prelude::{
     RapierContext,
     Restitution,
     RapierImpulseJointHandle,
-    // FixedJointBuilder,
 };
 
 use crate::{
@@ -166,158 +166,153 @@ fn add_balls(
 }
 
 const MAX_JOINTS: usize = 10;
+const PAIRWISE_JOINTS_ALLOWED: u8 = 2;
 const JOINT_DISTANCE: f32 = BALL_RADIUS * 0.05;
 
-fn print_component_names(world: &World, entity: Entity, indents: Option<usize>) {
-    let indent = "\t".repeat(indents.unwrap_or(0));
-    println!("{}Entity: {:?}", indent, entity);
+fn print_entity_info(
+    world: &World,
+    q_children: &Query<&Children>,
+    q_bevy_impulse_joint: &Query<&BevyImpulseJoint>,
+    entity: Entity,
+    label: Option<&str>,
+    indents: Option<usize>,
+) {
+    let defaulted_indents = indents.unwrap_or(0);
+    let defaulted_label = label.unwrap_or("Entity");
+    println!("{}{}: {:?}", "\t".repeat(defaulted_indents), defaulted_label, entity);
     if let Some(entity_ref) = world.get_entity(entity) {
         for type_id in entity_ref.archetype().components() {
             let component_info = world.components().get_info(type_id).unwrap();
-            println!("{}\tComponent: {:?}", indent, component_info.name());
+            println!("{}\tComponent: {:?}", "\t".repeat(defaulted_indents + 1), component_info.name());
+        }
+        if let Ok(children) = q_children.get(entity) {
+            for child in children.iter() {
+                print_entity_info(world, q_children, q_bevy_impulse_joint, *child, Some("Child"), Some(defaulted_indents + 2));
+            }
+        }
+        if let Ok(bevy_impulse_joint) = q_bevy_impulse_joint.get(entity) {
+            print_entity_info(world, q_children, q_bevy_impulse_joint, bevy_impulse_joint.parent, Some("Joint Parent"), Some(defaulted_indents + 2));
         }
     } else {
-        println!("{}Entity not found", indent);
+        println!("{}Entity not found", "\t".repeat(defaulted_indents + 1));
     }
 }
 
+fn has_more_than_max_joints(
+    q_children_for_balls: &Query<&Children, With<Ball>>,
+    collider: &Entity,
+) -> bool {
+    let children = match q_children_for_balls.get(*collider) {
+        Ok(children) => children,
+        Err(_) => return false,
+    };
+    return children.len() > MAX_JOINTS;
+}
+
+fn already_has_max_pairwise_joints(
+    q_children_for_balls: &Query<&Children, With<Ball>>,
+    q_bevy_impulse_joints: &Query<&BevyImpulseJoint>,
+    collider1: &Entity,
+    collider2: &Entity,
+) -> bool {
+    let c1_children = match q_children_for_balls.get(*collider1) {
+        Ok(c1_children) => c1_children,
+        Err(_) => return false,
+    };
+    let mut count: u8 = 0;
+    for child in c1_children.iter() {
+        let bevy_impulse_joint = match q_bevy_impulse_joints.get(*child) {
+            Ok(bevy_impulse_joint) => bevy_impulse_joint,
+            Err(_) => continue,
+        };
+        if bevy_impulse_joint.parent == *collider2 {
+            count += 1;
+            if count >= PAIRWISE_JOINTS_ALLOWED { return true; }
+        }
+    }
+    return false;
+}
+
 fn sticky(
-    world: &World,
     mut commands: Commands,
     rapier_context: Res<RapierContext>,
     mut contact_force_collisions: EventReader<ContactForceEvent>,
-    balls_with_children: Query<(Entity, &Ball, &Children)>,
-    joints: Query<(Entity, &Parent, &BevyImpulseJoint)>,
+    q_balls: Query<Entity, With<Ball>>,
+    q_children_for_balls: Query<&Children, With<Ball>>,
+    q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
 ) {
     for ContactForceEvent{collider1, collider2, total_force_magnitude, ..} in contact_force_collisions.iter() {
         if *total_force_magnitude > STICKY_BREAKING_FORCE { continue; }
-        // println!("\nA contact was below the breaking force: {:?}", total_force_magnitude);
-        if let Some(contact_pair) = rapier_context.contact_pair(*collider1, *collider2) {
-            if *collider1 == *collider2 {
-                println!("Yo! This is a self contact!? wth?");
-            }
-            // println!("\tFound a contact pair between {:?} and {:?}", collider1, collider2);
-            // The contact pair exists meaning that the broad-phase identified a potential contact.
-            if contact_pair.has_any_active_contacts() {
-                // println!("\t\tThe contact pair has active contacts");
-                // There's only ever really one contact manifold for pure circles.
-                if let Some(manifold) = contact_pair.manifolds().into_iter().next() {
-                    // println!("\t\tThe contact pair has at least one contact manifold");
-                    // There's only ever really one point pair for pure circles.
-                    if let Some(contact_point) = manifold.points().into_iter().next() {
-                        // println!("\t\tThe contact pair has at least one contact point");
-                        if let Ok(c1_children) = balls_with_children.get_component::<Children>(*collider1) {
-                            if c1_children.len() > MAX_JOINTS { continue; }
-                            for child in c1_children.iter() {
-                                if let Ok(bevy_impulse_joint_parent) = joints.get_component::<Parent>(*child) {
-                                    println!("checking {:?} == {:?}", bevy_impulse_joint_parent.get(), *collider2);
-                                    if bevy_impulse_joint_parent.get() == *collider2 {
-                                        continue;
-                                    }
-                                }
-                            }
-                            print_component_names(world, *collider1, Some(0));
-                            for child in c1_children.iter() {
-                                print_component_names(world, *child, Some(3));
-                                if let Ok(bevy_impulse_joint_parent) = joints.get_component::<Parent>(*child) {
-                                    println!("\t\t\t\t{:?}", bevy_impulse_joint_parent.get());
-                                }
-                            }
-                        } else if let Ok(c2_children) = balls_with_children.get_component::<Children>(*collider2) {
-                            if c2_children.len() > MAX_JOINTS { continue; }
-                            for child in c2_children.iter() {
-                                if let Ok(bevy_impulse_joint_parent) = joints.get_component::<Parent>(*child) {
-                                    println!("checking {:?} == {:?}", bevy_impulse_joint_parent.get(), *collider1);
-                                    if bevy_impulse_joint_parent.get() == *collider1 {
-                                        continue;
-                                    }
-                                }
-                            }
-                            print_component_names(world, *collider1, Some(0));
-                            for child in c2_children.iter() {
-                                print_component_names(world, *child, Some(3));
-                                if let Ok(bevy_impulse_joint_parent) = joints.get_component::<Parent>(*child) {
-                                    println!("\t\t\t\t{:?}", bevy_impulse_joint_parent.get());
-                                }
-                            }
-                        }
-                        
-                        // println!("Creating a new joint between collider {:?} and collider {:?}", collider1, collider2);
-                        print!("+");
-                        println!("Creating a new joint between collider {:?} and collider {:?}", collider1, collider2);
-                        // joint.set_contacts_enabled(false);
-                        commands
-                        .entity(*collider2)
-                        .with_children(|parent| {
-                                // Keep in mind that all the geometric contact data are expressed in the local-space of the colliders.
-                                let e1_sticky_point: Vec2 = contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-                                let e2_sticky_point: Vec2 = contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-                                parent
-                                    .spawn(BevyImpulseJoint::new(
-                                        *collider1,
-                                        RevoluteJointBuilder::new()
-                                            .local_anchor1(e1_sticky_point)
-                                            .local_anchor2(e2_sticky_point)
-                                            .build(),
-                                    ))
-                                    // Explodes Too Often for Some Reason
-                                    // .spawn(BevyImpulseJoint::new(
-                                    //     *collider1,
-                                    //     // NOTE: setting the local anchors sets the translation part of the local frames.
-                                    //     FixedJointBuilder::new()
-                                    //         .local_anchor1(e1_sticky_point)
-                                    //         .local_anchor2(e2_sticky_point)
-                                    //         .build(),
-                                    // ))
-                                ;
-                            })
-                        ;
-                    }
-                }
-            }
+        if q_balls.get(*collider1).is_err() || q_balls.get(*collider2).is_err() { continue; }
     
+        // If the contact pair exists, that means that the broad-phase identified a potential contact.
+        let contact_pair = match rapier_context.contact_pair(*collider1, *collider2) {
+            Some(contact_pair) => contact_pair,
+            None => continue,
+        };
+        
+        if !contact_pair.has_any_active_contacts() { continue; }
+    
+        // There's only ever really one contact manifold for pure circles, just get the first.
+        let manifold = match contact_pair.manifolds().into_iter().next() {
+            Some(manifold) => manifold,
+            None => continue,
+        };
+        // There's only ever really one point pair for pure circles, just get the first.
+        let contact_point = match manifold.points().into_iter().next() {
+            Some(contact_point) => contact_point,
+            None => continue,
+        };
+
+        if
+            has_more_than_max_joints(&q_children_for_balls, collider1) ||
+            has_more_than_max_joints(&q_children_for_balls, collider2) ||
+            already_has_max_pairwise_joints(&q_children_for_balls, &q_bevy_impulse_joints, collider1, collider2)
+        {
+            continue;
         }
+        // println!("Creating a new joint between collider {:?} and collider {:?}", collider1, collider2);
+        // joint.set_contacts_enabled(false);
+        commands
+            .entity(*collider2)
+            .with_children(|parent| {
+                    // Keep in mind that all the geometric contact data are expressed in the local-space of the colliders.
+                    let e1_sticky_point: Vec2 = contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
+                    let e2_sticky_point: Vec2 = contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
+                    parent
+                        .spawn(BevyImpulseJoint::new(
+                            *collider1,
+                            RevoluteJointBuilder::new()
+                                .local_anchor1(e1_sticky_point)
+                                .local_anchor2(e2_sticky_point)
+                                .build(),
+                        ))
+                    ;
+                });
     }
 }
 
 fn unstick(
-    // world: &World,
     mut commands: Commands,
     context: ResMut<RapierContext>,
-    balls_with_children: Query<(Entity, &Ball, &Children)>,
-    joints: Query<(Entity, &mut BevyImpulseJoint, &RapierImpulseJointHandle)>,
+    q_children_for_balls_with_children: Query<&Children, With<Ball>>,
+    q_rapier_handles_with_bevy_impulse_joints: Query<&RapierImpulseJointHandle, With<BevyImpulseJoint>>,
 ) {
-    // for (joint_entity, bevy_impulse_joint, rapier_joint_handle) in joints.iter_mut() {
-    //     if let Some(rapier_joint) = context.impulse_joints.get_mut(rapier_joint_handle.0) {
-    //         for impulse in rapier_joint.impulses.column_iter() {
-    //             let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
-    //             if impulse_magnitude > STICKY_BREAKING_FORCE {
-    //                 if let Ok(children) = balls_with_children.get_component::<Children>(joint_entity) {
-    //                     for child_entity in children.iter() {
-    //                         println!("\t{:?} -> {:?}", joint_entity, child_entity);
-    //                         print_component_names(world, *child_entity);
-    //                     }
-    //                 }
-    //                 commands.entity(joint_entity).despawn();
-    //             }
-    //         }
-    //     }
-    // }
-    for (_, _, children) in balls_with_children.iter() {
-        for child_entity in children.iter() {
-            if let Ok(_bevy_joint) = joints.get_component::<BevyImpulseJoint>(*child_entity) {
-                let bevy_joint_entity = child_entity;
-                if let Ok(rapier_handle) = joints.get_component::<RapierImpulseJointHandle>(*child_entity) {
-                    if let Some(rapier_joint) = context.impulse_joints.get(rapier_handle.0) {
-                        for impulse in rapier_joint.impulses.column_iter() {
-                            let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
-                            if impulse_magnitude > STICKY_BREAKING_FORCE {
-                                print!("-");
-                                commands.entity(*bevy_joint_entity).despawn();
-                            }
-                        }
-                    
-                    }
+    for ball_children in q_children_for_balls_with_children.iter() {
+        for child_entity in ball_children.iter() {
+            let rapier_handle = match q_rapier_handles_with_bevy_impulse_joints.get(*child_entity) {
+                Ok(rapier_handle) => rapier_handle,
+                Err(_) => continue,
+            };
+            let bevy_impulse_joint_entity = child_entity;
+            let rapier_joint = match context.impulse_joints.get(rapier_handle.0) {
+                Some(rapier_joint) => rapier_joint,
+                None => continue,
+            };
+            for impulse in rapier_joint.impulses.column_iter() {
+                let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
+                if impulse_magnitude > STICKY_BREAKING_FORCE {
+                    commands.entity(*bevy_impulse_joint_entity).despawn_recursive();
                 }
             }
         }
@@ -330,8 +325,8 @@ impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
         app
         .insert_resource(
-            // NewBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)),
-            NewBallsTimer(Timer::from_seconds(1.5, TimerMode::Repeating)),
+            NewBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)),
+            // NewBallsTimer(Timer::from_seconds(1.5, TimerMode::Repeating)),
         )
         .insert_resource(
             ReproduceBallsTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
