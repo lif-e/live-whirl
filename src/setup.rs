@@ -86,7 +86,7 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
     ));
 }
 
-pub const WALL_HEIGHT: f32 = 10.0 * PIXELS_PER_METER;
+pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER;
 pub const GROUND_WIDTH: f32 = 8.0 * PIXELS_PER_METER;
 pub const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
 

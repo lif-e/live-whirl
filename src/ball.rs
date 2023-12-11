@@ -1,8 +1,9 @@
 use rand::{
-    Rng,
+    Rng, rngs::StdRng,
     // rngs::StdRng,
     // SeedableRng,
 };
+use std::f32::consts::PI;
 
 use bevy::{
     prelude::{
@@ -33,12 +34,12 @@ use bevy::{
         Update,
         Vec2,
         With,
-        World,
     },
     sprite::{
         ColorMaterial,
         MaterialMesh2dBundle,
     },
+    asset::Handle,
 };
 use bevy_rapier2d::prelude::{
     ActiveEvents,
@@ -53,6 +54,7 @@ use bevy_rapier2d::prelude::{
     RapierContext,
     Restitution,
     RapierImpulseJointHandle,
+    QueryFilter,
 };
 
 use crate::{
@@ -79,17 +81,127 @@ impl Default for Ball {
 #[derive(Resource)]
 struct ReproduceBallsTimer(pub Timer);
 
+fn has_too_many_adjacent_joints(
+    joint_querier: &Query<&BevyImpulseJoint>,
+    children: &Children,
+) -> bool {
+    let mut joint_count: u8 = 0;
+    for child in children.iter() {
+        if joint_querier.get(*child).is_err() { continue; }
+        joint_count += 1;
+        if joint_count >= 5 { return true; }
+    }
+    return false;
+}
+
+fn get_next_ball_position(
+    rng: &mut StdRng,
+    rapier_context: &Res<RapierContext>,
+    x: f32,
+    y: f32,
+    radius: f32,
+    new_ball_radius: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    let starting_angle = rng.gen_range(0.0, 2.0 * PI);
+    for test_angle_ndx in 0..5 {
+        let angle = starting_angle + (test_angle_ndx as f32 * (PI / 3.0));
+        let total_radius = radius + new_ball_radius;
+        let joint_x = x + radius * angle.cos();
+        let joint_y = y + radius * angle.sin();
+        let new_ball_x = x + total_radius * angle.cos();
+        let new_ball_y = y + total_radius * angle.sin();
+
+        let circle_shape = Collider::ball(new_ball_radius);
+
+        // Perform the proximity query
+        let first_hit = rapier_context.intersection_with_shape(
+            Vec2::new(new_ball_x, new_ball_y),
+            angle,
+            &circle_shape,
+            QueryFilter::default(),
+        );
+        if first_hit.is_some() { continue; }
+
+        return Some((joint_x, joint_y, new_ball_x, new_ball_y));
+    }
+    return None;
+
+}
+
 fn reproduce_balls(
+    mut commands: Commands,
+    rapier_context: Res<RapierContext>,
     time: Res<Time>,
     mut timer: ResMut<ReproduceBallsTimer>,
     mut rng_resource: ResMut<RngResource>,
-    mut balls: Query<(Entity, &Ball, &Children)>,
-    joint_querier: Query<&BevyImpulseJoint>,
-    ball_querier: Query<&Ball>,
+
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
+    q_children_and_transform_and_collider_and_color_handles_with_balls: Query<(&Children, &Transform, &Collider, &Handle<ColorMaterial>), With<Ball>>,
+    q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
 ) {
-    let mut rng = &mut rng_resource.rng;
-    if timer.0.tick(time.delta()).just_finished() {
+    if !timer.0.tick(time.delta()).just_finished() { return; }
+    
+    let rng = &mut rng_resource.rng;
+
+    for (children, transform, collider, color_handle) in q_children_and_transform_and_collider_and_color_handles_with_balls.iter() {
+        if rng.gen_range(0.0, 1.0) > 0.00625 { continue; }
+        if has_too_many_adjacent_joints(&q_bevy_impulse_joints, children) { continue; }
         
+        let x = transform.translation.x;
+        let y = transform.translation.y;
+        let radius = collider.as_ball().unwrap().radius();
+        let new_ball_radius: f32 = BALL_RADIUS;
+        
+        let (_joint_x, _joint_y, new_ball_x, new_ball_y) = match get_next_ball_position(
+            rng,
+            &rapier_context,
+            x,
+            y,
+            radius,
+            new_ball_radius,
+        ) {
+            Some((joint_x, joint_y, new_ball_x, new_ball_y)) => (joint_x, joint_y, new_ball_x, new_ball_y),
+            None => continue,
+        };
+        // println!("{:#?}", world.inspect_entity(entity));
+
+        let linearvelocity: Vec2 = Vec2::new(0.0, 0.0);
+
+        // let max_linear_magnitude: f32 = MAX_LINEAR_VELOCITY.length().abs().max(MAX_LINEAR_VELOCITY.length().abs());
+        // let magnitude: f32 = linearvelocity.length().abs();
+
+        let parent_color_material = color_materials.get(color_handle).unwrap();
+        let child_color_material = parent_color_material.clone();
+
+        commands.spawn(
+            (
+                Ball::default(),
+                RigidBody::Dynamic,
+                Collider::ball(radius),
+                ColliderMassProperties::Density(0.001),
+                Friction::coefficient(0.7),
+                Velocity {
+                    linvel: linearvelocity * PIXELS_PER_METER,
+                    angvel: 0.0,
+                },
+                ActiveEvents::CONTACT_FORCE_EVENTS,
+                // Ccd::enabled(),
+                Restitution::new(0.1),
+                
+                MaterialMesh2dBundle {
+                    mesh: meshes.add(Circle::new(radius).into()).into(),
+                    // 4. Put something bright in a dark environment to see the effect
+                    material: color_materials.add(child_color_material),
+                    transform: Transform::from_xyz(
+                        new_ball_x,
+                        new_ball_y,
+                        0.0,
+                    ),
+                    ..MaterialMesh2dBundle::default()
+                },
+            ),
+        );
     }
 }
 
@@ -118,6 +230,8 @@ fn add_balls(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
+    if !timer.0.tick(time.delta()).just_finished() { return; }
+
     let rng = &mut rng_resource.rng;
     let linearvelocity: Vec2 = Vec2::new(
         rng.gen_range(MIN_LINEAR_VELOCITY.x, MAX_LINEAR_VELOCITY.x),
@@ -128,75 +242,44 @@ fn add_balls(
 
     // update our timer with the time elapsed since the last update
     // if that caused the timer to finish, we say hello to everyone
-    if timer.0.tick(time.delta()).just_finished() {
-        commands
-            .spawn((
-                Ball::default(),
-                RigidBody::Dynamic,
-                Collider::ball(BALL_RADIUS),
-                ColliderMassProperties::Density(0.001),
-                Friction::coefficient(0.7),
-                Velocity {
-                    linvel: linearvelocity * PIXELS_PER_METER,
-                    angvel: 0.0,
-                },
-                ActiveEvents::CONTACT_FORCE_EVENTS,
-                // Ccd::enabled(),
-                Restitution::new(0.1),
-                
-                MaterialMesh2dBundle {
-                    mesh: meshes.add(Circle::new(BALL_RADIUS).into()).into(),
-                    // 4. Put something bright in a dark environment to see the effect
-                    material: materials.add(ColorMaterial::from(
-                        Color::hsl(
-                            rng.gen_range(0.0, 360.0),
-                            ((magnitude / max_linear_magnitude) * 10.0) + (0.90 - 0.11),
-                            0.5,
-                        )
-                    )),
-                    transform: Transform::from_xyz(
-                        rng.gen_range(SPAWN_BOX.min_x, SPAWN_BOX.max_x),
-                        rng.gen_range(SPAWN_BOX.min_y, SPAWN_BOX.max_y),
-                        0.0,
-                    ),
-                    ..MaterialMesh2dBundle::default()
-                },
-            ));
-    }
+    commands
+        .spawn((
+            Ball::default(),
+            RigidBody::Dynamic,
+            Collider::ball(BALL_RADIUS),
+            ColliderMassProperties::Density(0.001),
+            Friction::coefficient(0.7),
+            Velocity {
+                linvel: linearvelocity * PIXELS_PER_METER,
+                angvel: 0.0,
+            },
+            ActiveEvents::CONTACT_FORCE_EVENTS,
+            // Ccd::enabled(),
+            Restitution::new(0.1),
+            
+            MaterialMesh2dBundle {
+                mesh: meshes.add(Circle::new(BALL_RADIUS).into()).into(),
+                // 4. Put something bright in a dark environment to see the effect
+                material: materials.add(ColorMaterial::from(
+                    Color::hsl(
+                        rng.gen_range(0.0, 360.0),
+                        ((magnitude / max_linear_magnitude) * 10.0) + (0.90 - 0.11),
+                        0.5,
+                    )
+                )),
+                transform: Transform::from_xyz(
+                    rng.gen_range(SPAWN_BOX.min_x, SPAWN_BOX.max_x),
+                    rng.gen_range(SPAWN_BOX.min_y, SPAWN_BOX.max_y),
+                    0.0,
+                ),
+                ..MaterialMesh2dBundle::default()
+            },
+        ));
 }
 
 const MAX_JOINTS: usize = 10;
 const PAIRWISE_JOINTS_ALLOWED: u8 = 2;
 const JOINT_DISTANCE: f32 = BALL_RADIUS * 0.05;
-
-fn print_entity_info(
-    world: &World,
-    q_children: &Query<&Children>,
-    q_bevy_impulse_joint: &Query<&BevyImpulseJoint>,
-    entity: Entity,
-    label: Option<&str>,
-    indents: Option<usize>,
-) {
-    let defaulted_indents = indents.unwrap_or(0);
-    let defaulted_label = label.unwrap_or("Entity");
-    println!("{}{}: {:?}", "\t".repeat(defaulted_indents), defaulted_label, entity);
-    if let Some(entity_ref) = world.get_entity(entity) {
-        for type_id in entity_ref.archetype().components() {
-            let component_info = world.components().get_info(type_id).unwrap();
-            println!("{}\tComponent: {:?}", "\t".repeat(defaulted_indents + 1), component_info.name());
-        }
-        if let Ok(children) = q_children.get(entity) {
-            for child in children.iter() {
-                print_entity_info(world, q_children, q_bevy_impulse_joint, *child, Some("Child"), Some(defaulted_indents + 2));
-            }
-        }
-        if let Ok(bevy_impulse_joint) = q_bevy_impulse_joint.get(entity) {
-            print_entity_info(world, q_children, q_bevy_impulse_joint, bevy_impulse_joint.parent, Some("Joint Parent"), Some(defaulted_indents + 2));
-        }
-    } else {
-        println!("{}Entity not found", "\t".repeat(defaulted_indents + 1));
-    }
-}
 
 fn has_more_than_max_joints(
     q_children_for_balls: &Query<&Children, With<Ball>>,
@@ -233,17 +316,45 @@ fn already_has_max_pairwise_joints(
     return false;
 }
 
-fn sticky(
+fn contacts(
     mut commands: Commands,
     rapier_context: Res<RapierContext>,
     mut contact_force_collisions: EventReader<ContactForceEvent>,
     q_balls: Query<Entity, With<Ball>>,
     q_children_for_balls: Query<&Children, With<Ball>>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
+    q_velocities: Query<&Velocity>,
+    color_materials: ResMut<Assets<ColorMaterial>>,
+    q_color_material_handles: Query<&Handle<ColorMaterial>>,
 ) {
     for ContactForceEvent{collider1, collider2, total_force_magnitude, ..} in contact_force_collisions.iter() {
-        if *total_force_magnitude > STICKY_BREAKING_FORCE { continue; }
-        if q_balls.get(*collider1).is_err() || q_balls.get(*collider2).is_err() { continue; }
+        if *total_force_magnitude > STICKY_BREAKING_FORCE {
+            if q_balls.get(*collider1).is_err() || q_balls.get(*collider2).is_err() { continue; }
+            // let [velocity1, velocity2] = match q_velocities.get_many([*collider1, *collider2]) {
+            //     Ok(velocities) => velocities,
+            //     Err(_) => continue,
+            // };
+            // let [color_material_handle1, color_material_handle2] = match q_color_material_handles.get_many([*collider1, *collider2]) {
+            //     Ok(color_material_handles) => color_material_handles,
+            //     Err(_) => continue,
+            // };
+            // let color_material1 = match color_materials.get(color_material_handle1) {
+            //     Some(color_material) => color_material,
+            //     None => continue,
+            // };
+            // let color_material2 = match color_materials.get(color_material_handle2) {
+            //     Some(color_material) => color_material,
+            //     None => continue,
+            // };
+            // if color_material1.color != color_material2.color {
+            //     if velocity1.linvel.length().abs() > velocity2.linvel.length().abs() {
+            //         commands.entity(*collider2).despawn();
+            //     } else {
+            //         commands.entity(*collider1).despawn();
+            //     }
+            // }
+            continue;
+        }
     
         // If the contact pair exists, that means that the broad-phase identified a potential contact.
         let contact_pair = match rapier_context.contact_pair(*collider1, *collider2) {
@@ -325,19 +436,19 @@ impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
         app
         .insert_resource(
-            NewBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)),
+            NewBallsTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             // NewBallsTimer(Timer::from_seconds(1.5, TimerMode::Repeating)),
         )
         .insert_resource(
-            ReproduceBallsTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+            ReproduceBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)),
         )
         .add_systems(
             Update,
             (
                 add_balls,
-                sticky,
+                contacts,
                 unstick,
-                // reproduce_balls,
+                reproduce_balls,
             ),
         );
     }
