@@ -7,6 +7,7 @@ use bevy::{
         Color,
         Commands,
         Component,
+        default,
         Mesh,
         OrthographicProjection,
         Plugin,
@@ -18,7 +19,7 @@ use bevy::{
         },
         Startup,
         Transform,
-        Vec2, default,
+        Vec2,
     },
     core_pipeline::{
         bloom::{
@@ -32,16 +33,34 @@ use bevy::{
         ColorMaterial,
         MaterialMesh2dBundle,
     },
+    render::{
+        render_resource::{
+            Extent3d,
+            TextureDescriptor,
+            TextureDimension,
+            TextureFormat,
+            TextureUsages,
+        },
+        texture,
+        camera::RenderTarget,
+    },
 };
-use bevy_rapier2d::{prelude::{
-    Collider,
-    // DebugRenderMode,
-    NoUserData,
-    RapierConfiguration,
-    // RapierDebugRenderPlugin,
-    RapierPhysicsPlugin,
-}, plugin::TimestepMode};
-use bevy_image_export::{ImageExportBundle, ImageExportSource, ImageExportSettings};
+use bevy_rapier2d::{
+    prelude::{
+        Collider,
+        // DebugRenderMode,
+        NoUserData,
+        RapierConfiguration,
+        // RapierDebugRenderPlugin,
+        RapierPhysicsPlugin,
+    },
+    plugin::TimestepMode,
+};
+use bevy_image_export::{
+    ImageExportBundle,
+    ImageExportSource,
+    ImageExportSettings,
+};
 use rand::{
     rngs::StdRng,
     SeedableRng,
@@ -58,7 +77,7 @@ pub struct RngResource {
 pub fn setup_graphics(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
-    mut images: ResMut<Assets<Image>>,
+    mut images: ResMut<Assets<texture::Image>>,
     mut export_sources: ResMut<Assets<ImageExportSource>>,
 ) {
 
@@ -69,7 +88,7 @@ pub fn setup_graphics(
             height: 1920,
             ..default()
         };
-        let mut export_texture = Image {
+        let mut export_texture = texture::Image {
             texture_descriptor: TextureDescriptor {
                 label: None,
                 size,
