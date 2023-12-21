@@ -5,6 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "zshdb",
+            "request": "launch",
+            "name": "Debug executable 'live-whirl' then encode",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/debug_then_transcode.sh",
+            "args": []
+        },
+        {
             "type": "lldb",
             "request": "launch",
             "name": "Debug executable 'live-whirl'",

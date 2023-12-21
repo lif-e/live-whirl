@@ -2,6 +2,7 @@ use bevy::prelude::{
     App,
     DefaultPlugins,
 };
+use bevy_image_export::ImageExportPlugin;
 
 mod shared_consts;
 mod setup;
@@ -9,10 +10,14 @@ mod ball;
 use crate::setup::SetupPlugin;
 use crate::ball::BallPlugin;
 
-fn main() {
+fn main() {    
+    let export_plugin = ImageExportPlugin::default();
+    let export_threads = export_plugin.threads.clone();
+
     App::new()
     .add_plugins((
         DefaultPlugins,
+        export_plugin,
 
         SetupPlugin,
         BallPlugin,
@@ -29,4 +34,8 @@ fn main() {
         // bevy::diagnostic::SystemInformationDiagnosticsPlugin::default()
     ))
     .run();
+
+    // This line is optional but recommended.
+    // It blocks the main thread until all image files have been saved successfully.
+    export_threads.finish();
 }

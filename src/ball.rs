@@ -40,6 +40,7 @@ use bevy::{
         MaterialMesh2dBundle,
     },
     asset::Handle,
+    hierarchy::Parent,
 };
 use bevy_rapier2d::prelude::{
     ActiveEvents,
@@ -68,18 +69,158 @@ use crate::{
 };
 
 pub const BALL_RADIUS: f32 = 0.05 * PIXELS_PER_METER;
+const MAX_LIFE_POINTS: u32 = u32::MAX;
+const COLOR_SATURATION_SCALE_FACTOR: f32 = 10.0;
+const COLOR_SATURATION_MINIMUM: f32 = 0.90 - 0.11;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
-pub struct Ball;
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct Ball {
+    pub age: u32,
+    pub life_points: u32,
+    pub genome_max_age: u32,
+    pub genome_relative_reproduction_rate: f32,
+    pub genome_bite_size: u32,
+    pub genome_life_points_safe_to_reproduce: u32,
+}
 
 impl Default for Ball {
     fn default() -> Self {
-        Self
+        Self {
+            age: 0,
+            life_points: MAX_LIFE_POINTS,
+            genome_max_age: 10,
+            genome_relative_reproduction_rate: 0.00625,
+            genome_bite_size: 100,
+            genome_life_points_safe_to_reproduce: 20,
+        }
     }
 }
 
+impl Ball {
+    fn get_saturation(&self) -> f32 {
+        return (
+            (self.life_points as f32 / MAX_LIFE_POINTS as f32) *
+            COLOR_SATURATION_SCALE_FACTOR
+        ) + COLOR_SATURATION_MINIMUM;
+    }
+    pub fn transform_color(&self, color: Color) -> Color {
+        return Color::hsl(
+            color.h(),
+            self.get_saturation(),
+            color.l(),
+        );
+    }
+    pub fn random_color(&self, rng: &mut impl Rng) -> Color {
+        return Color::hsl(
+            rng.gen_range(0.0, 360.0),
+            self.get_saturation(),
+            0.5,
+        );
+    }
+}
+
+fn split_total_roughly_in_half(preferred_number: u32, other_number: u32) -> (u32, u32) {
+    let total_life_points: u64 = preferred_number as u64 + other_number as u64;
+    let floating_half: f32 = total_life_points as f32 / 2.0;
+	let higher_half: u32 = floating_half.ceil() as u32;
+	let lower_half: u32 = floating_half.floor() as u32;
+    return (higher_half, lower_half);
+}
+
+
+
 #[derive(Resource)]
 struct ReproduceBallsTimer(pub Timer);
+
+#[derive(Resource)]
+struct BallAndJointLoopTimer(pub Timer);
+
+fn update_life_points(
+    mut commands: Commands,
+    mut timer: ResMut<BallAndJointLoopTimer>,
+    time: Res<Time>,
+    mut q_balls_and_colors: Query<(Entity, &mut Ball, &Handle<ColorMaterial>)>,
+    q_impulse_joints: Query<(&BevyImpulseJoint, &Parent)>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
+) {
+    if !timer.0.tick(time.delta()).just_finished() { return; }
+
+    for (entity, mut ball, color_handle) in q_balls_and_colors.iter_mut() {
+        // let before_life_points = ball.life_points;
+        ball.age = if ball.age != u32::MAX { ball.age + 1 } else { u32::MAX };
+        if ball.age > ball.genome_max_age {
+            ball.life_points = (ball.life_points as f32 * 0.95) as u32;
+        }
+        // let change = ball.life_points as i32 - before_life_points as i32;
+        // if change != 0 || ball.life_points == 0 {
+        //     print!(
+        //         "\nLife {: >10}->{: >10} ({: >11}) with age {: >10}/{: >10} ({: >10})",
+        //         before_life_points,
+        //         ball.life_points,
+        //         change,
+        //         ball.age,
+        //         ball.genome_max_age,
+        //         ball.genome_max_age as i32 - ball.age as i32,
+        //     );
+        // }
+
+        if ball.life_points <= 9 {
+            // print!("o");
+            commands.entity(entity).despawn_recursive();
+        }
+        let color_material = match color_materials.get_mut(color_handle) {
+            Some(color_material) => color_material,
+            None => continue,
+        };
+        color_material.color = ball.transform_color(color_material.color);
+    }
+
+    for (joint, parent) in q_impulse_joints.iter() {
+        let [
+            (mut parent_ball, parent_color_handle),
+            (mut child_ball, child_color_handle)
+        ] = match q_balls_and_colors.get_many_mut([parent.get(), joint.parent]) {
+            Ok([
+                (_, parent_ball, parent_color_handle),
+                (_, child_ball, child_color_handle)
+            ]) => [(*parent_ball, parent_color_handle), (*child_ball, child_color_handle)],
+            Err(_) => continue,
+        };
+        // let parent_color_material = match color_materials.get(parent_color_handle) {
+        //     Some(color_material) => color_material,
+        //     None => continue,
+        // };
+        // let child_color_material = match color_materials.get(child_color_handle) {
+        //     Some(color_material) => color_material,
+        //     None => continue,
+        // };
+        if
+            // (parent_color_material.color.h() - child_color_material.color.h()).abs() > 20.1 ||
+            (parent_ball.life_points as i32 - child_ball.life_points as i32).abs() <= 19 { continue; }
+        
+        // let before_parent_life_points = parent_ball.life_points;
+        (parent_ball.life_points, child_ball.life_points) = split_total_roughly_in_half(
+            parent_ball.life_points,
+            child_ball.life_points,
+        );
+        // print!(
+        //     "\nLife {: >10}->{: >10} ({: >11})",
+        //     before_parent_life_points,
+        //     parent_ball.life_points,
+        //     parent_ball.life_points as i32 - before_parent_life_points as i32,
+        // );
+        let parent_color_material = match color_materials.get_mut(parent_color_handle) {
+            Some(color_material) => color_material,
+            None => continue,
+        };
+        parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
+        let child_color_material = match color_materials.get_mut(child_color_handle) {
+            Some(color_material) => color_material,
+            None => continue,
+        };
+        child_color_material.color = child_ball.transform_color(child_color_material.color);
+    }
+}
 
 fn has_too_many_adjacent_joints(
     joint_querier: &Query<&BevyImpulseJoint>,
@@ -137,15 +278,16 @@ fn reproduce_balls(
 
     mut meshes: ResMut<Assets<Mesh>>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
-    q_children_and_transform_and_collider_and_color_handles_with_balls: Query<(&Children, &Transform, &Collider, &Handle<ColorMaterial>), With<Ball>>,
+    q_children_and_transform_and_collider_and_color_handles_with_balls: Query<(&Children, &Transform, &Collider, &Handle<ColorMaterial>, &mut Ball, &Velocity)>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() { return; }
     
     let rng = &mut rng_resource.rng;
 
-    for (children, transform, collider, color_handle) in q_children_and_transform_and_collider_and_color_handles_with_balls.iter() {
-        if rng.gen_range(0.0, 1.0) > 0.00625 { continue; }
+    for (children, transform, collider, color_handle, parent_ball, parent_ball_velocity) in q_children_and_transform_and_collider_and_color_handles_with_balls.iter() {
+        if rng.gen_range(0.0, 1.0) > parent_ball.genome_relative_reproduction_rate { continue; }
+        if parent_ball.life_points < parent_ball.genome_life_points_safe_to_reproduce { continue; }
         if has_too_many_adjacent_joints(&q_bevy_impulse_joints, children) { continue; }
         
         let x = transform.translation.x;
@@ -162,27 +304,71 @@ fn reproduce_balls(
             new_ball_radius,
         ) {
             Some((joint_x, joint_y, new_ball_x, new_ball_y)) => (joint_x, joint_y, new_ball_x, new_ball_y),
-            None => continue,
+            None => if rng.gen_range(0.0, 1.0) < 0.005 { (0.0, 0.0, x, y) } else { continue; }
         };
         // println!("{:#?}", world.inspect_entity(entity));
 
-        let linearvelocity: Vec2 = Vec2::new(0.0, 0.0);
+        let linearvelocity: Vec2 = Vec2::new(
+            parent_ball_velocity.linvel.x,
+            parent_ball_velocity.linvel.y,
+        );
 
-        // let max_linear_magnitude: f32 = MAX_LINEAR_VELOCITY.length().abs().max(MAX_LINEAR_VELOCITY.length().abs());
-        // let magnitude: f32 = linearvelocity.length().abs();
+        
+        let mut parent_ball = *parent_ball;
+        let child_life_points;
+        (parent_ball.life_points, child_life_points) = split_total_roughly_in_half(parent_ball.life_points, 0);
+        let child_ball = Ball {
+            age: 0,
+            life_points: child_life_points,
+            genome_max_age: (
+                (
+                    parent_ball.genome_max_age as f32 +
+                    rng.gen_range(-1.0, 1.0)
+                ).max(0.0).min(u32::MAX as f32) as u32
+            ),
+            genome_relative_reproduction_rate: parent_ball.genome_relative_reproduction_rate + rng.gen_range(-0.01, 0.01),
+            genome_bite_size: (
+                (
+                    parent_ball.genome_bite_size as f32 +
+                    rng.gen_range(-10.0, 10.0)
+                ).max(0.0).min(u32::MAX as f32) as u32
+            ),
+            genome_life_points_safe_to_reproduce: (
+                (
+                    parent_ball.genome_life_points_safe_to_reproduce as f32 +
+                    rng.gen_range(-1000.0, 1000.0)
+                ).max(0.0).min(u32::MAX as f32) as u32
+            ),
+        };
 
-        let parent_color_material = color_materials.get(color_handle).unwrap();
-        let child_color_material = parent_color_material.clone();
+        let mut parent_color_material = color_materials.get_mut(color_handle).unwrap();
+        parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
+        let child_color_material = ColorMaterial::from(
+            child_ball.transform_color(Color::hsl(
+                (parent_color_material.color.h() + 1.875) % 360.0,
+                parent_color_material.color.s(),
+                parent_color_material.color.l(),
+            ))
+        );
+
+        // print!(
+        //     "\nBaby: Life {: >10}, Max Age {: >10}, Reproduction Rate {: >.4}, Bite Size {: >10}, Safe Reproduction Life {: >10}",
+        //     child_ball.life_points,
+        //     child_ball.genome_max_age,
+        //     child_ball.genome_relative_reproduction_rate,
+        //     child_ball.genome_bite_size,
+        //     child_ball.genome_life_points_safe_to_reproduce,
+        // );
 
         commands.spawn(
             (
-                Ball::default(),
+                child_ball,
                 RigidBody::Dynamic,
                 Collider::ball(radius),
                 ColliderMassProperties::Density(0.001),
                 Friction::coefficient(0.7),
                 Velocity {
-                    linvel: linearvelocity * PIXELS_PER_METER,
+                    linvel: linearvelocity,
                     angvel: 0.0,
                 },
                 ActiveEvents::CONTACT_FORCE_EVENTS,
@@ -211,7 +397,8 @@ struct NewBallsTimer(pub Timer);
 const SPAWN_BOX: Box = Box {
     min_x: (-0.5 *  GROUND_WIDTH) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
     max_x: ( 0.5 *  GROUND_WIDTH) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
-    min_y: (-0.5 *   WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
+    // min_y: (-0.5 *   WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
+    min_y: ( 0.5 *   WALL_HEIGHT) - (BALL_RADIUS * 4.0) - (0.5 * WALL_THICKNESS),
     max_y: ( 0.5 *   WALL_HEIGHT) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
     min_z: 0.0,
     max_z: 0.0,
@@ -220,7 +407,9 @@ const SPAWN_BOX: Box = Box {
 const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
 const MAX_LINEAR_VELOCITY: Vec2 = Vec2::new( 1.0,  1.0);
 
-const STICKY_BREAKING_FORCE: f32 = 0.0000025;
+// const STICKY_BREAKING_FORCE: f32 = 0.0000025;
+// const STICKY_BREAKING_FORCE: f32 = 0.000005;
+const STICKY_BREAKING_FORCE: f32 = 0.00001;
 
 fn add_balls(
     time: Res<Time>,
@@ -237,14 +426,22 @@ fn add_balls(
         rng.gen_range(MIN_LINEAR_VELOCITY.x, MAX_LINEAR_VELOCITY.x),
         rng.gen_range(MIN_LINEAR_VELOCITY.y, MAX_LINEAR_VELOCITY.y),
     );
-    let max_linear_magnitude: f32 = MAX_LINEAR_VELOCITY.length().abs().max(MAX_LINEAR_VELOCITY.length().abs());
-    let magnitude: f32 = linearvelocity.length().abs();
+
+    let ball = Ball {
+        age: 0,
+        life_points: MAX_LIFE_POINTS,
+        genome_max_age: rng.gen_range(0, 100),
+        genome_relative_reproduction_rate: rng.gen_range(0.0, 0.00625 * 2.0),
+        genome_bite_size: rng.gen_range(0, 400),
+        genome_life_points_safe_to_reproduce: rng.gen_range(0, 1000),
+    };
+    let color_material = ColorMaterial::from(ball.random_color(rng));
 
     // update our timer with the time elapsed since the last update
     // if that caused the timer to finish, we say hello to everyone
     commands
         .spawn((
-            Ball::default(),
+            ball,
             RigidBody::Dynamic,
             Collider::ball(BALL_RADIUS),
             ColliderMassProperties::Density(0.001),
@@ -260,13 +457,7 @@ fn add_balls(
             MaterialMesh2dBundle {
                 mesh: meshes.add(Circle::new(BALL_RADIUS).into()).into(),
                 // 4. Put something bright in a dark environment to see the effect
-                material: materials.add(ColorMaterial::from(
-                    Color::hsl(
-                        rng.gen_range(0.0, 360.0),
-                        ((magnitude / max_linear_magnitude) * 10.0) + (0.90 - 0.11),
-                        0.5,
-                    )
-                )),
+                material: materials.add(color_material),
                 transform: Transform::from_xyz(
                     rng.gen_range(SPAWN_BOX.min_x, SPAWN_BOX.max_x),
                     rng.gen_range(SPAWN_BOX.min_y, SPAWN_BOX.max_y),
@@ -320,44 +511,87 @@ fn contacts(
     mut commands: Commands,
     rapier_context: Res<RapierContext>,
     mut contact_force_collisions: EventReader<ContactForceEvent>,
-    q_balls: Query<Entity, With<Ball>>,
+    q_balls: Query<&mut Ball>,
     q_children_for_balls: Query<&Children, With<Ball>>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
     q_velocities: Query<&Velocity>,
-    color_materials: ResMut<Assets<ColorMaterial>>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
     q_color_material_handles: Query<&Handle<ColorMaterial>>,
 ) {
-    for ContactForceEvent{collider1, collider2, total_force_magnitude, ..} in contact_force_collisions.iter() {
+    for ContactForceEvent{collider1, collider2, total_force_magnitude, ..} in contact_force_collisions.read() {
+        let collider1 = *collider1;
+        let collider2 = *collider2;
         if *total_force_magnitude > STICKY_BREAKING_FORCE {
-            if q_balls.get(*collider1).is_err() || q_balls.get(*collider2).is_err() { continue; }
-            // let [velocity1, velocity2] = match q_velocities.get_many([*collider1, *collider2]) {
-            //     Ok(velocities) => velocities,
-            //     Err(_) => continue,
-            // };
-            // let [color_material_handle1, color_material_handle2] = match q_color_material_handles.get_many([*collider1, *collider2]) {
-            //     Ok(color_material_handles) => color_material_handles,
-            //     Err(_) => continue,
-            // };
-            // let color_material1 = match color_materials.get(color_material_handle1) {
-            //     Some(color_material) => color_material,
-            //     None => continue,
-            // };
-            // let color_material2 = match color_materials.get(color_material_handle2) {
-            //     Some(color_material) => color_material,
-            //     None => continue,
-            // };
-            // if color_material1.color != color_material2.color {
-            //     if velocity1.linvel.length().abs() > velocity2.linvel.length().abs() {
-            //         commands.entity(*collider2).despawn();
-            //     } else {
-            //         commands.entity(*collider1).despawn();
-            //     }
-            // }
+            let ball1 = q_balls.get(collider1);
+            let ball2 = q_balls.get(collider2);
+            if ball1.is_err() || ball2.is_err() { continue; }
+            let [velocity1, velocity2] = match q_velocities.get_many([collider1, collider2]) {
+                Ok(velocities) => velocities,
+                Err(_) => continue,
+            };
+            let [color_material_handle1, color_material_handle2] = match q_color_material_handles.get_many([collider1, collider2]) {
+                Ok(color_material_handles) => color_material_handles,
+                Err(_) => continue,
+            };
+            let color_material1 = match color_materials.get(color_material_handle1) {
+                Some(color_material) => color_material,
+                None => continue,
+            };
+            let color_material2 = match color_materials.get(color_material_handle2) {
+                Some(color_material) => color_material,
+                None => continue,
+            };
+            
+            if (color_material1.color.h() - color_material2.color.h()).abs() > 20.1 {
+                let mut ball2 = *ball2.unwrap();
+                let mut ball1 = *ball1.unwrap();
+                if velocity1.linvel.length().abs() > velocity2.linvel.length().abs() {
+                    let bite_size = ball1.genome_bite_size;
+                    ball2.life_points = if ball2.life_points <= bite_size {
+                        0
+                    } else {
+                        ball2.life_points - bite_size
+                    };
+                    ball1.life_points = if ball1.life_points >= (u32::MAX - bite_size) {
+                        u32::MAX
+                    } else {
+                        ball1.life_points + bite_size
+                    };
+                    // print!(
+                    //     "\nBite {: >10}->{: >10} ({: >11})",
+                    //     ball2.life_points,
+                    //     ball1.life_points,
+                    //     ball1.life_points as i32 - ball2.life_points as i32,
+                    // );
+                } else {
+                    let bite_size = ball2.genome_bite_size;
+                    ball1.life_points = if ball1.life_points <= bite_size {
+                        0
+                    } else {
+                        ball1.life_points - bite_size
+                    };
+                    ball2.life_points = if ball2.life_points >= (u32::MAX - bite_size) {
+                        u32::MAX
+                    } else {
+                        ball2.life_points + bite_size
+                    };
+                    // print!(
+                    //     "\nBite {: >10}->{: >10} ({: >11})",
+                    //     ball1.life_points,
+                    //     ball2.life_points,
+                    //     ball2.life_points as i32 - ball1.life_points as i32,
+                    // );
+                }
+                let color_material1 = color_materials.get_mut(color_material_handle1).unwrap();
+                color_material1.color = ball1.transform_color(color_material1.color);
+                let color_material2 = color_materials.get_mut(color_material_handle2).unwrap();
+                color_material2.color = ball2.transform_color(color_material2.color);
+            }
             continue;
         }
     
         // If the contact pair exists, that means that the broad-phase identified a potential contact.
-        let contact_pair = match rapier_context.contact_pair(*collider1, *collider2) {
+        let contact_pair = match rapier_context.contact_pair(collider1, collider2) {
             Some(contact_pair) => contact_pair,
             None => continue,
         };
@@ -376,30 +610,28 @@ fn contacts(
         };
 
         if
-            has_more_than_max_joints(&q_children_for_balls, collider1) ||
-            has_more_than_max_joints(&q_children_for_balls, collider2) ||
-            already_has_max_pairwise_joints(&q_children_for_balls, &q_bevy_impulse_joints, collider1, collider2)
+            has_more_than_max_joints(&q_children_for_balls, &collider1) ||
+            has_more_than_max_joints(&q_children_for_balls, &collider2) ||
+            already_has_max_pairwise_joints(&q_children_for_balls, &q_bevy_impulse_joints, &collider1, &collider2)
         {
             continue;
         }
         // println!("Creating a new joint between collider {:?} and collider {:?}", collider1, collider2);
         // joint.set_contacts_enabled(false);
-        commands
-            .entity(*collider2)
-            .with_children(|parent| {
-                    // Keep in mind that all the geometric contact data are expressed in the local-space of the colliders.
-                    let e1_sticky_point: Vec2 = contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-                    let e2_sticky_point: Vec2 = contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-                    parent
-                        .spawn(BevyImpulseJoint::new(
-                            *collider1,
-                            RevoluteJointBuilder::new()
-                                .local_anchor1(e1_sticky_point)
-                                .local_anchor2(e2_sticky_point)
-                                .build(),
-                        ))
-                    ;
-                });
+        // print!("+");
+
+        let e1_sticky_point: Vec2 = contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
+        let e2_sticky_point: Vec2 = contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
+        let child = commands.spawn(BevyImpulseJoint::new(
+            collider1,
+            RevoluteJointBuilder::new()
+                .local_anchor1(e1_sticky_point)
+                .local_anchor2(e2_sticky_point)
+                .build(),
+        )).id();
+
+        commands.entity(collider2)
+            .push_children(&[child]);
     }
 }
 
@@ -423,6 +655,7 @@ fn unstick(
             for impulse in rapier_joint.impulses.column_iter() {
                 let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
                 if impulse_magnitude > STICKY_BREAKING_FORCE {
+                    // print!("-");
                     commands.entity(*bevy_impulse_joint_entity).despawn_recursive();
                 }
             }
@@ -442,6 +675,9 @@ impl Plugin for BallPlugin {
         .insert_resource(
             ReproduceBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)),
         )
+        .insert_resource(
+            BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)),
+        )
         .add_systems(
             Update,
             (
@@ -449,6 +685,7 @@ impl Plugin for BallPlugin {
                 contacts,
                 unstick,
                 reproduce_balls,
+                update_life_points,
             ),
         );
     }

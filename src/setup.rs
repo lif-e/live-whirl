@@ -18,7 +18,7 @@ use bevy::{
         },
         Startup,
         Transform,
-        Vec2,
+        Vec2, default,
     },
     core_pipeline::{
         bloom::{
@@ -33,14 +33,15 @@ use bevy::{
         MaterialMesh2dBundle,
     },
 };
-use bevy_rapier2d::prelude::{
+use bevy_rapier2d::{prelude::{
     Collider,
-    DebugRenderMode,
+    // DebugRenderMode,
     NoUserData,
     RapierConfiguration,
-    RapierDebugRenderPlugin,
+    // RapierDebugRenderPlugin,
     RapierPhysicsPlugin,
-};
+}, plugin::TimestepMode};
+use bevy_image_export::{ImageExportBundle, ImageExportSource, ImageExportSettings};
 use rand::{
     rngs::StdRng,
     SeedableRng,
@@ -54,19 +55,61 @@ pub struct RngResource {
     pub rng: StdRng,
 }
 
-pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
-    rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
+pub fn setup_graphics(
+    mut commands: Commands,
+    mut rapier_config: ResMut<RapierConfiguration>,
+    mut images: ResMut<Assets<Image>>,
+    mut export_sources: ResMut<Assets<ImageExportSource>>,
+) {
+
+    // Create an output texture.
+    let output_texture_handle = {
+        let size = Extent3d {
+            width: 1080,
+            height: 1920,
+            ..default()
+        };
+        let mut export_texture = Image {
+            texture_descriptor: TextureDescriptor {
+                label: None,
+                size,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8UnormSrgb,
+                mip_level_count: 1,
+                sample_count: 1,
+                usage: TextureUsages::COPY_DST
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
+            ..default()
+        };
+        export_texture.resize(size);
+
+        images.add(export_texture)
+    };
+    
+    // rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
+    rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625 * 100.0);
+    rapier_config.timestep_mode = TimestepMode::Fixed {
+        /// The physics simulation will be advanced by this total amount at each Bevy tick.
+        dt: 1.0 / 60.0,
+        /// This number of substeps of length `dt / substeps` will be performed at each Bevy tick.
+        substeps: 1,
+    };
 
     commands.spawn((
         Camera2dBundle {
             camera: Camera {
                 hdr: true, // 1. HDR is required for bloom
+                target: RenderTarget::Image(output_texture_handle.clone()),
                 ..Camera::default()
             },
             tonemapping: Tonemapping::TonyMcMapface, // 2. Using an HDR tonemapper that desaturates to white is recommended
             projection: OrthographicProjection {
                 near: -1000., // Camera2DBundle default that doesn't match OrthographicProjection default
-                scale: 6.0,
+                // scale: 6.0,
+                scale: 4.0,
                 ..OrthographicProjection::default()
             },
             ..Camera2dBundle::default()
@@ -84,9 +127,19 @@ pub fn setup_graphics(mut commands: Commands, mut rapier_config: ResMut<RapierCo
             ..BloomSettings::default()
         },
     ));
+
+    commands.spawn(ImageExportBundle {
+        source: export_sources.add(output_texture_handle.into()),
+        settings: ImageExportSettings {
+            // Frames will be saved to "./out/[#####].png".
+            output_dir: "out".into(),
+            // Choose "exr" for HDR renders.
+            extension: "png".into(),
+        },
+    });
 }
 
-pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER;
+pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER * 1.62068966;
 pub const GROUND_WIDTH: f32 = 8.0 * PIXELS_PER_METER;
 pub const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
 
@@ -198,19 +251,19 @@ impl Plugin for SetupPlugin {
         })
         .add_plugins((
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(PIXELS_PER_METER),
-            RapierDebugRenderPlugin {
-                mode: (
-                    DebugRenderMode::COLLIDER_SHAPES
-                    // | DebugRenderMode::RIGID_BODY_AXES
-                    // | DebugRenderMode::MULTIBODY_JOINTS
-                    | DebugRenderMode::IMPULSE_JOINTS
-                    // | DebugRenderMode::JOINTS
-                    // | DebugRenderMode::COLLIDER_AABBS
-                    // | DebugRenderMode::SOLVER_CONTACTS
-                    // | DebugRenderMode::CONTACTS
-                ),
-                ..RapierDebugRenderPlugin::default()
-            },
+            // RapierDebugRenderPlugin {
+            //     mode: (
+            //         DebugRenderMode::COLLIDER_SHAPES
+            //         // | DebugRenderMode::RIGID_BODY_AXES
+            //         // | DebugRenderMode::MULTIBODY_JOINTS
+            //         | DebugRenderMode::IMPULSE_JOINTS
+            //         // | DebugRenderMode::JOINTS
+            //         // | DebugRenderMode::COLLIDER_AABBS
+            //         // | DebugRenderMode::SOLVER_CONTACTS
+            //         // | DebugRenderMode::CONTACTS
+            //     ),
+            //     ..RapierDebugRenderPlugin::default()
+            // },
         ))
         .add_systems(
             Startup,
