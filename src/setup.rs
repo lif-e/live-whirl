@@ -7,7 +7,7 @@ use bevy::{
         Color,
         Commands,
         Component,
-        default,
+        // default,
         Mesh,
         OrthographicProjection,
         Plugin,
@@ -33,17 +33,17 @@ use bevy::{
         ColorMaterial,
         MaterialMesh2dBundle,
     },
-    render::{
-        render_resource::{
-            Extent3d,
-            TextureDescriptor,
-            TextureDimension,
-            TextureFormat,
-            TextureUsages,
-        },
-        texture,
-        camera::RenderTarget,
-    },
+    // render::{
+    //     render_resource::{
+    //         Extent3d,
+    //         TextureDescriptor,
+    //         TextureDimension,
+    //         TextureFormat,
+    //         TextureUsages,
+    //     },
+    //     texture,
+    //     camera::RenderTarget,
+    // },
 };
 use bevy_rapier2d::{
     prelude::{
@@ -56,14 +56,14 @@ use bevy_rapier2d::{
     },
     plugin::TimestepMode,
 };
-use bevy_image_export::{
-    ImageExportBundle,
-    ImageExportSource,
-    ImageExportSettings,
-};
+// use bevy_image_export::{
+//     ImageExportBundle,
+//     ImageExportSource,
+//     ImageExportSettings,
+// };
 use rand::{
     rngs::StdRng,
-    SeedableRng,
+    SeedableRng, Rng,
 };
 
 use crate::shared_consts::PIXELS_PER_METER;
@@ -77,43 +77,43 @@ pub struct RngResource {
 pub fn setup_graphics(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
-    mut images: ResMut<Assets<texture::Image>>,
-    mut export_sources: ResMut<Assets<ImageExportSource>>,
+    // mut images: ResMut<Assets<texture::Image>>,
+    // mut export_sources: ResMut<Assets<ImageExportSource>>,
 ) {
 
-    // Create an output texture.
-    let output_texture_handle = {
-        let size = Extent3d {
-            width: 1080,
-            height: 1920,
-            ..default()
-        };
-        let mut export_texture = texture::Image {
-            texture_descriptor: TextureDescriptor {
-                label: None,
-                size,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8UnormSrgb,
-                mip_level_count: 1,
-                sample_count: 1,
-                usage: TextureUsages::COPY_DST
-                    | TextureUsages::COPY_SRC
-                    | TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            },
-            ..default()
-        };
-        export_texture.resize(size);
+    // // Create an output texture.
+    // let output_texture_handle = {
+    //     let size = Extent3d {
+    //         width: 1080,
+    //         height: 1920,
+    //         ..default()
+    //     };
+    //     let mut export_texture = texture::Image {
+    //         texture_descriptor: TextureDescriptor {
+    //             label: None,
+    //             size,
+    //             dimension: TextureDimension::D2,
+    //             format: TextureFormat::Rgba8UnormSrgb,
+    //             mip_level_count: 1,
+    //             sample_count: 1,
+    //             usage: TextureUsages::COPY_DST
+    //                 | TextureUsages::COPY_SRC
+    //                 | TextureUsages::RENDER_ATTACHMENT,
+    //             view_formats: &[],
+    //         },
+    //         ..default()
+    //     };
+    //     export_texture.resize(size);
 
-        images.add(export_texture)
-    };
+    //     images.add(export_texture)
+    // };
     
     // rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
     rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625 * 100.0);
     rapier_config.timestep_mode = TimestepMode::Fixed {
-        /// The physics simulation will be advanced by this total amount at each Bevy tick.
+        // The physics simulation will be advanced by this total amount at each Bevy tick.
         dt: 1.0 / 60.0,
-        /// This number of substeps of length `dt / substeps` will be performed at each Bevy tick.
+        // This number of substeps of length `dt / substeps` will be performed at each Bevy tick.
         substeps: 1,
     };
 
@@ -121,7 +121,7 @@ pub fn setup_graphics(
         Camera2dBundle {
             camera: Camera {
                 hdr: true, // 1. HDR is required for bloom
-                target: RenderTarget::Image(output_texture_handle.clone()),
+                // target: RenderTarget::Image(output_texture_handle.clone()),
                 ..Camera::default()
             },
             tonemapping: Tonemapping::TonyMcMapface, // 2. Using an HDR tonemapper that desaturates to white is recommended
@@ -147,15 +147,15 @@ pub fn setup_graphics(
         },
     ));
 
-    commands.spawn(ImageExportBundle {
-        source: export_sources.add(output_texture_handle.into()),
-        settings: ImageExportSettings {
-            // Frames will be saved to "./out/[#####].png".
-            output_dir: "out".into(),
-            // Choose "exr" for HDR renders.
-            extension: "png".into(),
-        },
-    });
+    // commands.spawn(ImageExportBundle {
+    //     source: export_sources.add(output_texture_handle.into()),
+    //     settings: ImageExportSettings {
+    //         // Frames will be saved to "./out/[#####].png".
+    //         output_dir: "out".into(),
+    //         // Choose "exr" for HDR renders.
+    //         extension: "png".into(),
+    //     },
+    // });
 }
 
 pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER * 1.62068966;
@@ -195,7 +195,9 @@ pub fn setup_whirl(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut rng_resource: ResMut<RngResource>,
 ) {
+    let rng = &mut rng_resource.rng;
     let mut add_wall = |
         size: Vec2,
         position: Vec2,
@@ -256,6 +258,22 @@ pub fn setup_whirl(
                         ..MaterialMesh2dBundle::default()
                     },
                 ));
+            let is_pocket = (i != SPACED_WIDTH) && rng.gen_range(0.0, 1.0) < 0.025;
+            if is_pocket {
+                let size = Vec2::new(BALL_RADIUS * 6.0, BALL_RADIUS);
+                let position = Vec2::new(x + row_shift + (HORIZONTAL_SPACING / 2.0), y - (VERTICAL_SPACING / 3.0));
+                commands
+                    .spawn((
+                        Peg::default(),
+                        Collider::cuboid(size.x / 2.0, size.y / 2.0),
+                        MaterialMesh2dBundle {
+                            mesh: meshes.add(Quad::new(size).into()).into(),
+                            material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
+                            transform: Transform::from_xyz(position.x, position.y, 0.0),
+                            ..MaterialMesh2dBundle::default()
+                        },
+                    ));
+            }
         }
     }
 }
