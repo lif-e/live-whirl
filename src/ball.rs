@@ -2,7 +2,7 @@ use rand::{
     rngs::StdRng,
     // rngs::StdRng,
     // SeedableRng,
-    Rng,
+    Rng, SeedableRng,
 };
 use std::f32::consts::PI;
 
