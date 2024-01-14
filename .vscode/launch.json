@@ -33,6 +33,25 @@
             },
             "args": [],
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Release executable 'live-whirl'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--release",
+                    "--bin=live-whirl",
+                    "--package=live-whirl"
+                ],
+                "filter": {
+                    "name": "live-whirl",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
         }
     ]
 }
