@@ -13,14 +13,11 @@ use bevy::{
         Plugin,
         ResMut,
         Resource,
-        shape::{
-            Quad,
-            Box,
-        },
         Startup,
         Transform,
         Vec2,
     },
+
     core_pipeline::{
         bloom::{
             BloomCompositeMode,
@@ -33,6 +30,7 @@ use bevy::{
         ColorMaterial,
         MaterialMesh2dBundle,
     },
+
     // render::{
     //     render_resource::{
     //         Extent3d,
@@ -164,7 +162,8 @@ pub const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
 
 const GROUND_POSITION: f32 = -0.5 * WALL_HEIGHT;
 
-const WALL_BOX: Box = Box {
+struct Box2D { min_x: f32, max_x: f32, min_y: f32, max_y: f32, min_z: f32, max_z: f32 }
+const WALL_BOX: Box2D = Box2D {
     min_x: -0.5 * GROUND_WIDTH,
     max_x:  0.5 * GROUND_WIDTH,
     min_y: GROUND_POSITION,
@@ -207,7 +206,7 @@ pub fn setup_whirl(
                 Wall::default(),
                 Collider::cuboid(size.x / 2.0, size.y / 2.0),
                 MaterialMesh2dBundle {
-                    mesh: meshes.add(Quad::new(size).into()).into(),
+                    mesh: meshes.add(bevy::math::primitives::Rectangle::from_size(size)).into(),
                     material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
                     transform: Transform::from_xyz(position.x, position.y, 0.0),
                     ..MaterialMesh2dBundle::default()
@@ -252,7 +251,7 @@ pub fn setup_whirl(
                     Peg::default(),
                     Collider::cuboid(size.x / 2.0, size.y / 2.0),
                     MaterialMesh2dBundle {
-                        mesh: meshes.add(Quad::new(size).into()).into(),
+                        mesh: meshes.add(bevy::math::primitives::Rectangle::from_size(size)).into(),
                         material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
                         transform: Transform::from_xyz(position.x, position.y, 0.0),
                         ..MaterialMesh2dBundle::default()
@@ -267,7 +266,7 @@ pub fn setup_whirl(
                         Peg::default(),
                         Collider::cuboid(size.x / 2.0, size.y / 2.0),
                         MaterialMesh2dBundle {
-                            mesh: meshes.add(Quad::new(size).into()).into(),
+                            mesh: meshes.add(bevy::math::primitives::Rectangle::from_size(size)).into(),
                             material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
                             transform: Transform::from_xyz(position.x, position.y, 0.0),
                             ..MaterialMesh2dBundle::default()

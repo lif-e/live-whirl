@@ -8,9 +8,10 @@ use std::f32::consts::PI;
 
 use bevy::{
     asset::Handle,
+    color::Hsla,
     hierarchy::Parent,
+    math::primitives::Circle,
     prelude::{
-        shape::{Box, Circle},
         App, Assets, BuildChildren, Children, Color, Commands, Component, DespawnRecursiveExt,
         Entity, EventReader, Mesh, Plugin, Query, Res, ResMut, Resource, Time, Timer, TimerMode,
         Transform, Update, Vec2, With,
@@ -83,7 +84,17 @@ impl Ball {
             + COLOR_SATURATION_MINIMUM;
     }
     pub fn transform_color(&self, color: Color) -> Color {
-        return Color::hsl(self.get_hue(), self.get_saturation(), color.l());
+        // Preserve the original color's lightness while applying this Ball's hue/saturation.
+        // In Bevy 0.14, use color space structs instead of direct h/s/l accessors.
+        // Convert to HSLA, swap h and s, keep l and a as-is.
+        let hsla: Hsla = color.into();
+        let new_hsla = Hsla {
+            hue: self.get_hue().into(),
+            saturation: self.get_saturation(),
+            lightness: hsla.lightness,
+            alpha: hsla.alpha,
+        };
+        Color::from(new_hsla)
     }
     pub fn get_color(&self) -> Color {
         return Color::hsl(self.get_hue(), self.get_saturation(), 0.5);
@@ -374,11 +385,7 @@ fn reproduce_balls(
 
         let parent_color_material = color_materials.get_mut(color_handle).unwrap();
         parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
-        let child_color_material = ColorMaterial::from(child_ball.transform_color(Color::hsl(
-            (parent_color_material.color.h() + 1.875) % 360.0,
-            parent_color_material.color.s(),
-            parent_color_material.color.l(),
-        )));
+        let child_color_material = ColorMaterial::from(child_ball.get_color());
 
         // print!(
         //     "\nBaby: Life {: >10}, Max Age {: >10}, Reproduction Rate {: >.4}, Bite Size {: >10}, Safe Reproduction Life {: >10}",
@@ -403,7 +410,7 @@ fn reproduce_balls(
             // Ccd::enabled(),
             Restitution::new(0.1),
             MaterialMesh2dBundle {
-                mesh: meshes.add(Circle::new(radius).into()).into(),
+                mesh: meshes.add(Circle::new(radius)).into(),
                 // 4. Put something bright in a dark environment to see the effect
                 material: color_materials.add(child_color_material),
                 transform: Transform::from_xyz(new_ball_x, new_ball_y, 0.0),
@@ -416,7 +423,8 @@ fn reproduce_balls(
 #[derive(Resource)]
 struct NewBallsTimer(pub Timer);
 
-const SPAWN_BOX: Box = Box {
+struct Box2D { min_x: f32, max_x: f32, min_y: f32, max_y: f32, min_z: f32, max_z: f32 }
+const SPAWN_BOX: Box2D = Box2D {
     min_x: (-0.5 * GROUND_WIDTH) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
     max_x: (0.5 * GROUND_WIDTH) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
     // min_y: (-0.5 *   WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
@@ -528,7 +536,7 @@ fn add_balls(
         Restitution::new(0.1),
         MaterialMesh2dBundle {
             mesh: meshes.add(
-                Circle::new(BALL_RADIUS).into()
+                Circle::new(BALL_RADIUS)
             ).into(),
             // 4. Put something bright in a dark environment to see the effect
             material: materials.add(color_material),
@@ -681,7 +689,7 @@ fn contacts(
             None => continue,
         };
 
-        if !contact_pair.has_any_active_contacts() {
+        if !contact_pair.has_any_active_contact() {
             continue;
         }
 
