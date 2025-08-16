@@ -33,17 +33,15 @@ use bevy::{
         MaterialMesh2dBundle,
     },
 
-    // render::{
-    //     render_resource::{
-    //         Extent3d,
-    //         TextureDescriptor,
-    //         TextureDimension,
-    //         TextureFormat,
-    //         TextureUsages,
-    //     },
-    //     texture,
-    //     camera::RenderTarget,
-    // },
+    render::{
+        render_resource::{
+            Extent3d,
+            TextureDimension,
+            TextureFormat,
+            TextureUsages,
+        },
+        texture,
+    },
 };
 use bevy_rapier2d::{
     prelude::{
@@ -58,6 +56,7 @@ use bevy_rapier2d::{
 };
 // use bevy_image_export::{
 //     ImageExportBundle,
+
 //     ImageExportSource,
 //     ImageExportSettings,
 // };
@@ -87,16 +86,39 @@ pub fn setup_meshes(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
     commands.insert_resource(MeshAssets2d { ball_circle: circle });
 }
 
+#[derive(Resource, Default, Clone, Copy)]
+pub struct VideoExportRequest { pub width: u32, pub height: u32, pub fps: u32 }
+
 pub fn setup_graphics(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
     headless: Option<Res<Headless>>,
-    // mut images: ResMut<Assets<texture::Image>>,
-    // mut export_sources: ResMut<Assets<ImageExportSource>>,
+    mut images: ResMut<Assets<texture::Image>>,
+    video_req: Option<Res<VideoExportRequest>>,
 ) {
-    if matches!(headless.as_deref(), Some(Headless(true))) {
-        // Headless: still configure rapier but skip camera/bloom/window resources
+    let has_video = video_req.is_some();
+    let export = video_req.as_deref().copied().unwrap_or(VideoExportRequest { width: 1080, height: 1920, fps: 60 });
+
+    let mut offscreen_handle_opt: Option<Handle<texture::Image>> = None;
+    if has_video {
+        let mut offscreen_image = texture::Image::new_fill(
+            Extent3d { width: export.width, height: export.height, depth_or_array_layers: 1 },
+            TextureDimension::D2,
+            &vec![0u8; (export.width * export.height * 4) as usize],
+            TextureFormat::Rgba8UnormSrgb,
+            bevy::render::render_asset::RenderAssetUsages::RENDER_WORLD,
+        );
+        offscreen_image.texture_descriptor.usage = TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT;
+        let offscreen_handle = images.add(offscreen_image);
+        commands.insert_resource(crate::capture::OffscreenTargetRender {
+            handle: offscreen_handle.clone(),
+            width: export.width,
+            height: export.height,
+        });
+        offscreen_handle_opt = Some(offscreen_handle);
     }
+
+    let is_headless = matches!(headless.as_deref(), Some(Headless(true)));
 
 
     // // Create an output texture.
@@ -135,35 +157,53 @@ pub fn setup_graphics(
         substeps: 1,
     };
 
-    commands.spawn((
-        Camera2dBundle {
+    if !is_headless {
+        commands.spawn((
+            Camera2dBundle {
+                camera: Camera { hdr: true, ..Camera::default() },
+                tonemapping: Tonemapping::TonyMcMapface,
+                projection: OrthographicProjection {
+                    near: -1000.,
+                    scale: 4.0,
+                    ..OrthographicProjection::default()
+                },
+                ..Camera2dBundle::default()
+            },
+            BloomSettings {
+                intensity: 0.27848008 / 4.0,
+                low_frequency_boost: 0.35,
+                low_frequency_boost_curvature: 0.91,
+                high_pass_frequency: 1.0,
+                composite_mode: BloomCompositeMode::EnergyConserving,
+                prefilter_settings : BloomPrefilterSettings { threshold: 0.0, threshold_softness: 0.0 },
+                ..BloomSettings::default()
+            },
+        ));
+    }
+
+    if let Some(offscreen_handle) = &offscreen_handle_opt {
+        use bevy::render::camera::RenderTarget;
+        // Spawn a 2D camera targeting the offscreen image; no window required
+        let scale_x = export.width as f32 / GROUND_WIDTH;
+        let scale_y = export.height as f32 / WALL_HEIGHT;
+        let fit_scale = scale_x.min(scale_y);
+
+        commands.spawn(Camera2dBundle {
             camera: Camera {
-                hdr: true, // 1. HDR is required for bloom
-                // target: RenderTarget::Image(output_texture_handle.clone()),
-                ..Camera::default()
+                hdr: false,
+                target: RenderTarget::Image(offscreen_handle.clone()),
+                ..Default::default()
             },
-            tonemapping: Tonemapping::TonyMcMapface, // 2. Using an HDR tonemapper that desaturates to white is recommended
             projection: OrthographicProjection {
-                near: -1000., // Camera2DBundle default that doesn't match OrthographicProjection default
-                // scale: 6.0,
-                scale: 4.0,
-                ..OrthographicProjection::default()
+                near: -1000.,
+                scale: fit_scale,
+                ..Default::default()
             },
-            ..Camera2dBundle::default()
-        },
-        BloomSettings {
-            intensity: 0.27848008 / 4.0,
-            low_frequency_boost: 0.35, // 0.5019195,
-            low_frequency_boost_curvature: 0.91, // 1.0,
-            high_pass_frequency: 1.0,
-            composite_mode: BloomCompositeMode::EnergyConserving,
-            prefilter_settings : BloomPrefilterSettings {
-                threshold: 0.0,
-                threshold_softness: 0.0,
-            },
-            ..BloomSettings::default()
-        },
-    ));
+            transform: Transform::from_xyz(0.0, 0.0, 1000.0),
+            ..Default::default()
+        });
+    }
+
 
     // commands.spawn(ImageExportBundle {
     //     source: export_sources.add(output_texture_handle.into()),

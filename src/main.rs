@@ -19,13 +19,15 @@ use bevy::{
 
 mod shared_consts;
 mod setup;
+mod capture;
+mod ffmpeg;
 mod ball;
 use crate::setup::SetupPlugin;
 use crate::ball::BallPlugin;
 
 fn main() {
     // let mut rng = StdRng::seed_from_u64(42);
-    // // Set up the FFmpeg process    
+    // // Set up the FFmpeg process
     // let handle = thread::spawn(move || {
     //     const CRF: u8 = 32;
     //     let now = chrono::Utc::now();
@@ -45,7 +47,7 @@ fn main() {
     //             Ok(child) => child,
     //             Err(e) => panic!("Failed to spawn FFmpeg process: {}", e),
     //         };
-    
+
     //     // You can use child.wait() here if you want to wait for the process to finish
     //     // Get the stdin of the child process
     //     let mut stdin = match child.stdin.take() {
@@ -53,7 +55,7 @@ fn main() {
     //         None => panic!("Failed to open stdin of FFmpeg process"),
     //     };
     //     // Write data to stdin
-        
+
     //     for ndx in 0..600 {
     //         if rng.gen_bool(0.01) {
     //             sleep(std::time::Duration::from_millis(100));
@@ -79,6 +81,8 @@ fn main() {
     // let _ = handle.join();
 
 
+    let video_export = std::env::var("VIDEO_EXPORT").ok().is_some();
+
     // let export_plugin = ImageExportPlugin::default();
     // let export_threads = export_plugin.threads.clone();
 
@@ -95,6 +99,23 @@ fn main() {
         }));
     } else {
         app.add_plugins(DefaultPlugins);
+    }
+
+    // If video export is requested, configure offscreen target and capture
+    if video_export {
+        // Provide export request; setup_graphics will create an offscreen target and camera
+        app.insert_resource(crate::setup::VideoExportRequest { width: 1080, height: 1920, fps: 60 });
+
+        // Frame channel to feed ffmpeg
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        app.insert_resource(crate::capture::FrameSender { tx });
+
+        // Wire capture into render subapp
+        crate::capture::add_render_capture_systems(&mut app);
+
+        // Spawn ffmpeg thread
+        let _ff = crate::ffmpeg::spawn_ffmpeg(1080, 1920, 60, rx)
+            .expect("Failed to spawn ffmpeg; ensure it is installed and on PATH");
     }
 
     app.add_plugins((
