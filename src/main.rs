@@ -11,9 +11,9 @@
 //     SeedableRng,
 // };
 
-use bevy::prelude::{
-    App,
-    DefaultPlugins,
+use bevy::{
+    prelude::{App, DefaultPlugins, PluginGroup},
+    window::WindowPlugin,
 };
 // use bevy_image_export::ImageExportPlugin;
 
@@ -82,24 +82,24 @@ fn main() {
     // let export_plugin = ImageExportPlugin::default();
     // let export_threads = export_plugin.threads.clone();
 
-    App::new()
-    .add_plugins((
-        DefaultPlugins,
-        // export_plugin,
+    let headless = std::env::var("HEADLESS").ok().is_some();
 
+    let mut app = App::new();
+    if headless {
+        app.insert_resource(crate::setup::Headless(true));
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: None,
+            close_when_requested: false,
+            exit_condition: bevy::window::ExitCondition::DontExit,
+            ..Default::default()
+        }));
+    } else {
+        app.add_plugins(DefaultPlugins);
+    }
+
+    app.add_plugins((
         SetupPlugin,
         BallPlugin,
-
-        // Adds a system that prints diagnostics to the console
-        // LogDiagnosticsPlugin::default(),
-        // Adds frame time diagnostics
-        // FrameTimeDiagnosticsPlugin::default(),
-        // Any plugin can register diagnostics. Uncomment this to add an entity count diagnostics:
-        // bevy::diagnostic::EntityCountDiagnosticsPlugin::default(),
-        // Uncomment this to add an asset count diagnostics:
-        // bevy::asset::diagnostic::AssetCountDiagnosticsPlugin::<Texture>::default(),
-        // Uncomment this to add system info diagnostics:
-        // bevy::diagnostic::SystemInformationDiagnosticsPlugin::default()
     ))
     .run();
 

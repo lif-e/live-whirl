@@ -16,6 +16,7 @@ use bevy::{
         Resource,
         Startup,
         Transform,
+        Res,
         Vec2,
     },
 
@@ -78,6 +79,9 @@ pub struct MeshAssets2d {
     pub ball_circle: Handle<Mesh>,
 }
 
+#[derive(Resource)]
+pub struct Headless(pub bool);
+
 pub fn setup_meshes(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
     let circle = meshes.add(bevy::math::primitives::Circle::new(super::ball::BALL_RADIUS));
     commands.insert_resource(MeshAssets2d { ball_circle: circle });
@@ -86,9 +90,14 @@ pub fn setup_meshes(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
 pub fn setup_graphics(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
+    headless: Option<Res<Headless>>,
     // mut images: ResMut<Assets<texture::Image>>,
     // mut export_sources: ResMut<Assets<ImageExportSource>>,
 ) {
+    if matches!(headless.as_deref(), Some(Headless(true))) {
+        // Headless: still configure rapier but skip camera/bloom/window resources
+    }
+
 
     // // Create an output texture.
     // let output_texture_handle = {
