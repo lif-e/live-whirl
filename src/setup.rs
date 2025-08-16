@@ -9,6 +9,7 @@ use bevy::{
         Component,
         // default,
         Mesh,
+        Handle,
         OrthographicProjection,
         Plugin,
         ResMut,
@@ -72,6 +73,16 @@ pub struct RngResource {
     pub rng: StdRng,
 }
 
+#[derive(Resource, Default)]
+pub struct MeshAssets2d {
+    pub ball_circle: Handle<Mesh>,
+}
+
+pub fn setup_meshes(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
+    let circle = meshes.add(bevy::math::primitives::Circle::new(super::ball::BALL_RADIUS));
+    commands.insert_resource(MeshAssets2d { ball_circle: circle });
+}
+
 pub fn setup_graphics(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
@@ -105,7 +116,7 @@ pub fn setup_graphics(
 
     //     images.add(export_texture)
     // };
-    
+
     // rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
     rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625 * 100.0);
     rapier_config.timestep_mode = TimestepMode::Fixed {
@@ -304,6 +315,7 @@ impl Plugin for SetupPlugin {
         .add_systems(
             Startup,
             (
+                setup_meshes,
                 setup_graphics,
                 setup_whirl,
             ),

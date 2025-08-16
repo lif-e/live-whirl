@@ -447,8 +447,9 @@ fn add_balls(
     mut commands: Commands,
     mut rng_resource: ResMut<RngResource>,
     rapier_context: Res<RapierContext>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mesh_assets: Res<crate::setup::MeshAssets2d>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    q_balls: Query<Entity, With<Ball>>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -535,9 +536,7 @@ fn add_balls(
         // Ccd::enabled(),
         Restitution::new(0.1),
         MaterialMesh2dBundle {
-            mesh: meshes.add(
-                Circle::new(BALL_RADIUS)
-            ).into(),
+            mesh: mesh_assets.ball_circle.clone().into(),
             // 4. Put something bright in a dark environment to see the effect
             material: materials.add(color_material),
             transform: Transform::from_xyz(x, y, 0.0),
