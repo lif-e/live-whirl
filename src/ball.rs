@@ -1,21 +1,15 @@
-use rand::{
-    rngs::StdRng,
-    Rng,
-};
+use rand::{rngs::StdRng, Rng};
 use std::f32::consts::PI;
 
-use std::io::{stdout, Write};
 use bevy::{
-    asset::Handle,
     color::Hsla,
-    hierarchy::Parent,
-    math::primitives::Circle,
     prelude::{
-        App, Assets, BuildChildren, Children, Color, Commands, Component, DespawnRecursiveExt,
-        Entity, EventReader, Mesh, Plugin, Query, Res, ResMut, Resource, Time, Timer, TimerMode,
+        App, Assets, Children, Color, Commands, Component,
+        Entity, EventReader, GlobalTransform, Local, Plugin, Query, Res, ResMut, Resource, Time, Timer, TimerMode,
         Transform, Update, Vec2, With,
     },
-    sprite::{ColorMaterial, MaterialMesh2dBundle},
+    render::{prelude::Mesh2d, view::RenderLayers},
+    sprite::{ColorMaterial, MeshMaterial2d},
 };
 use bevy_rapier2d::prelude::{
     ActiveEvents, Collider, ColliderMassProperties, ContactForceEvent, Friction,
@@ -44,6 +38,12 @@ pub struct Ball {
     pub genome_energy_share_with_children: f32,
     pub genome_friendly_scent: Vec2,
     pub genome_friendly_distance: f32,
+}
+
+// Render-only companion for a Ball entity (kept separate from physics parent)
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct BallRender {
+    pub parent: Entity,
 }
 
 impl Default for Ball {
@@ -78,9 +78,10 @@ impl Ball {
         return hue;
     }
     fn get_saturation(&self) -> f32 {
-        return ((self.life_points as f32 / MAX_LIFE_POINTS as f32)
+        let s = ((self.life_points as f32 / MAX_LIFE_POINTS as f32)
             * COLOR_SATURATION_SCALE_FACTOR)
             + COLOR_SATURATION_MINIMUM;
+        s.clamp(COLOR_SATURATION_MINIMUM, 1.0)
     }
     pub fn transform_color(&self, color: Color) -> Color {
         // Preserve the original color's lightness while applying this Ball's hue/saturation.
@@ -125,8 +126,8 @@ fn update_life_points(
     mut commands: Commands,
     mut timer: ResMut<BallAndJointLoopTimer>,
     time: Res<Time>,
-    mut q_balls_and_colors: Query<(Entity, &mut Ball, &Handle<ColorMaterial>)>,
-    q_impulse_joints: Query<(&BevyImpulseJoint, &Parent)>,
+    mut q_balls_and_colors: Query<(Entity, &mut Ball, &MeshMaterial2d<ColorMaterial>)>,
+    q_impulse_joints: Query<(&BevyImpulseJoint, &bevy::prelude::ChildOf)>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     mut rng_resource: ResMut<RngResource>,
 ) {
@@ -159,7 +160,7 @@ fn update_life_points(
 
         if ball.life_points <= 9 {
             // print!("o");
-            commands.entity(entity).despawn_recursive();
+            commands.entity(entity).despawn();
         }
         let color_material = match color_materials.get_mut(color_handle) {
             Some(color_material) => color_material,
@@ -172,7 +173,7 @@ fn update_life_points(
 
     for (joint, parent) in q_impulse_joints.iter() {
         let [(mut parent_ball, parent_color_handle), (mut child_ball, child_color_handle)] =
-            match q_balls_and_colors.get_many_mut([parent.get(), joint.parent]) {
+            match q_balls_and_colors.get_many_mut([parent.parent(), joint.parent]) {
                 Ok(
                     [(_, parent_ball, parent_color_handle), (_, child_ball, child_color_handle)],
                 ) => [
@@ -205,7 +206,8 @@ fn update_life_points(
         } else if !parent_is_friendly && !child_is_friendly {
             if parent_ball.life_points > child_ball.life_points && life_points_diff_abs > 100 {
                 rng.gen_range(0.5, 0.9)
-            } else if parent_ball.life_points < child_ball.life_points && life_points_diff_abs > 100 {
+            } else if parent_ball.life_points < child_ball.life_points && life_points_diff_abs > 100
+            {
                 rng.gen_range(0.1, 0.5)
             } else {
                 0.5
@@ -255,7 +257,7 @@ fn has_too_many_adjacent_joints(
 
 fn get_next_ball_position(
     rng: &mut StdRng,
-    rapier_context: &Res<RapierContext>,
+    rapier_context: &RapierContext,
     x: f32,
     y: f32,
     radius: f32,
@@ -270,18 +272,18 @@ fn get_next_ball_position(
         let new_ball_x = x + total_radius * angle.cos();
         let new_ball_y = y + total_radius * angle.sin();
 
-        let circle_shape = Collider::ball(new_ball_radius);
+        let circle_shape = bevy_rapier2d::parry::shape::Ball::new(new_ball_radius);
 
         // Perform the proximity query
-        let first_hit = rapier_context.intersection_with_shape(
+        let mut hit = false;
+        rapier_context.intersect_shape(
             Vec2::new(new_ball_x, new_ball_y),
-            angle, // This could just be 0
+            angle,
             &circle_shape,
             QueryFilter::default(),
+            |_entity| { hit = true; false }
         );
-        if first_hit.is_some() {
-            continue;
-        }
+        if hit { continue; }
 
         return Some((joint_x, joint_y, new_ball_x, new_ball_y));
     }
@@ -290,18 +292,18 @@ fn get_next_ball_position(
 
 fn reproduce_balls(
     mut commands: Commands,
-    rapier_context: Res<RapierContext>,
+    rapier: bevy_rapier2d::prelude::ReadRapierContext,
     time: Res<Time>,
     mut timer: ResMut<ReproduceBallsTimer>,
     mut rng_resource: ResMut<RngResource>,
 
-    mut meshes: ResMut<Assets<Mesh>>,
+    _mesh_assets: Res<crate::setup::MeshAssets2d>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     q_children_and_transform_and_collider_and_color_handles_with_balls: Query<(
         &Children,
         &Transform,
         &Collider,
-        &Handle<ColorMaterial>,
+        &MeshMaterial2d<ColorMaterial>,
         &mut Ball,
         &Velocity,
     )>,
@@ -312,6 +314,8 @@ fn reproduce_balls(
     }
 
     let rng = &mut rng_resource.rng;
+
+    let Ok(ctx) = rapier.single() else { return; };
 
     for (children, transform, collider, color_handle, parent_ball, parent_ball_velocity) in
         q_children_and_transform_and_collider_and_color_handles_with_balls.iter()
@@ -332,7 +336,7 @@ fn reproduce_balls(
         let new_ball_radius: f32 = BALL_RADIUS;
 
         let (_joint_x, _joint_y, new_ball_x, new_ball_y) =
-            match get_next_ball_position(rng, &rapier_context, x, y, radius, new_ball_radius) {
+            match get_next_ball_position(rng, &ctx, x, y, radius, new_ball_radius) {
                 Some((joint_x, joint_y, new_ball_x, new_ball_y)) => {
                     (joint_x, joint_y, new_ball_x, new_ball_y)
                 }
@@ -384,7 +388,9 @@ fn reproduce_balls(
 
         let parent_color_material = color_materials.get_mut(color_handle).unwrap();
         parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
-        let child_color_material = ColorMaterial::from(child_ball.get_color());
+        // Force bright green for debugging visibility parity with test ball
+        // TEMP DEBUG: neon magenta to maximize visibility
+        let _child_color_material = ColorMaterial::from(Color::hsl(300.0, 1.0, 0.5));
 
         // print!(
         //     "\nBaby: Life {: >10}, Max Age {: >10}, Reproduction Rate {: >.4}, Bite Size {: >10}, Safe Reproduction Life {: >10}",
@@ -395,34 +401,57 @@ fn reproduce_balls(
         //     child_ball.genome_life_points_safe_to_reproduce,
         // );
 
-        commands.spawn((
-            child_ball,
-            RigidBody::Dynamic,
-            Collider::ball(radius),
-            ColliderMassProperties::Density(0.001),
-            Friction::coefficient(0.7),
-            Velocity {
-                linvel: linearvelocity,
-                angvel: 0.0,
-            },
-            ActiveEvents::CONTACT_FORCE_EVENTS,
-            // Ccd::enabled(),
-            Restitution::new(0.1),
-            MaterialMesh2dBundle {
-                mesh: meshes.add(Circle::new(radius)).into(),
-                // 4. Put something bright in a dark environment to see the effect
-                material: color_materials.add(child_color_material),
-                transform: Transform::from_xyz(new_ball_x, new_ball_y, 1.0),
-                ..MaterialMesh2dBundle::default()
-            },
-        ));
+        eprintln!("[diag] reproduce spawn at ({:.1},{:.1})", new_ball_x, new_ball_y);
+
+        // Spawn physics parent and render child separately
+        let parent = commands
+            .spawn((
+                child_ball,
+                RigidBody::Dynamic,
+                Collider::ball(radius),
+                ColliderMassProperties::Density(0.001),
+                Friction::coefficient(0.7),
+                Velocity {
+                    linvel: linearvelocity,
+                    angvel: 0.0,
+                },
+                ActiveEvents::CONTACT_FORCE_EVENTS,
+                // Ccd::enabled(),
+                Restitution::new(0.1),
+                // Ensure parent participates in visibility hierarchy
+                bevy::render::view::Visibility::Visible,
+                bevy::render::view::InheritedVisibility::VISIBLE,
+                Transform::from_xyz(new_ball_x, new_ball_y, 0.0),
+                GlobalTransform::default(),
+                RenderLayers::layer(1),
+            ))
+            .id();
+        let child = commands
+            .spawn((
+                bevy::sprite::Sprite::from_color(Color::hsl(0.0, 1.0, 0.6), Vec2::new(36.0, 36.0)),
+                bevy::render::view::Visibility::Visible,
+                bevy::prelude::InheritedVisibility::VISIBLE,
+                Transform::from_xyz(0.0, 0.0, 30.0),
+                bevy::render::view::NoFrustumCulling,
+                RenderLayers::from_layers(&[0, 1]),
+                BallRender { parent },
+            ))
+            .id();
+        commands.entity(parent).add_child(child);
     }
 }
 
 #[derive(Resource)]
 struct NewBallsTimer(pub Timer);
 
-struct Box2D { min_x: f32, max_x: f32, min_y: f32, max_y: f32, min_z: f32, max_z: f32 }
+struct Box2D {
+    min_x: f32,
+    max_x: f32,
+    min_y: f32,
+    max_y: f32,
+    min_z: f32,
+    max_z: f32,
+}
 const SPAWN_BOX: Box2D = Box2D {
     min_x: (-0.5 * GROUND_WIDTH) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
     max_x: (0.5 * GROUND_WIDTH) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
@@ -445,10 +474,10 @@ fn add_balls(
     mut timer: ResMut<NewBallsTimer>,
     mut commands: Commands,
     mut rng_resource: ResMut<RngResource>,
-    rapier_context: Res<RapierContext>,
+    rapier: bevy_rapier2d::prelude::ReadRapierContext,
     mesh_assets: Res<crate::setup::MeshAssets2d>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    q_balls: Query<Entity, With<Ball>>,
+    _q_balls: Query<Entity, With<Ball>>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -456,82 +485,98 @@ fn add_balls(
 
     let rng = &mut rng_resource.rng;
     let linearvelocity: Vec2 = Vec2::new(
-        rng.gen_range(
-            MIN_LINEAR_VELOCITY.x,
-            MAX_LINEAR_VELOCITY.x,
-        ),
-        rng.gen_range(
-            MIN_LINEAR_VELOCITY.y,
-            MAX_LINEAR_VELOCITY.y,
-        ),
+        rng.gen_range(MIN_LINEAR_VELOCITY.x, MAX_LINEAR_VELOCITY.x),
+        rng.gen_range(MIN_LINEAR_VELOCITY.y, MAX_LINEAR_VELOCITY.y),
     );
 
     let ball = Ball {
         age: 0,
         life_points: MAX_LIFE_POINTS,
         genome_max_age: rng.gen_range(90, 120),
-        genome_relative_reproduction_rate: rng.gen_range(
-            0.00625 * 1.9,
-            0.00625 * 2.0,
-        ),
+        genome_relative_reproduction_rate: rng.gen_range(0.00625 * 1.9, 0.00625 * 2.0),
         genome_bite_size: rng.gen_range(0, 400),
-        genome_life_points_safe_to_reproduce: rng.gen_range(
-            0,
-            1000,
-        ),
-        genome_energy_share_with_children: rng.gen_range(
-            0.25,
-            0.75,
-        ),
-        genome_friendly_scent: Vec2::new(
-            rng.gen_range(-1.0, 1.0),
-            rng.gen_range(-1.0, 1.0),
-        ),
-        genome_friendly_distance: rng.gen_range(
-            0.15,
-            1.0,
-        ),
+        genome_life_points_safe_to_reproduce: rng.gen_range(0, 1000),
+        genome_energy_share_with_children: rng.gen_range(0.25, 0.75),
+        genome_friendly_scent: Vec2::new(rng.gen_range(-1.0, 1.0), rng.gen_range(-1.0, 1.0)),
+        genome_friendly_distance: rng.gen_range(0.15, 1.0),
     };
-    let color_material: ColorMaterial = ColorMaterial::from(
-        ball.get_color(),
+    // Force bright green for debugging visibility parity with test ball
+    // TEMP DEBUG: neon magenta to maximize visibility
+    let _color_material: ColorMaterial = ColorMaterial::from(Color::hsl(300.0, 1.0, 0.5));
+
+    // Collider for the spawned rigid body
+    let circle_collider = Collider::ball(BALL_RADIUS);
+
+    let Ok(ctx) = rapier.single() else { return; };
+
+    // Spawn in a mid band that is clearly within the playfield
+    let x = rng.gen_range(SPAWN_BOX.min_x, SPAWN_BOX.max_x);
+    let y = rng.gen_range(0.20 * WALL_HEIGHT, 0.35 * WALL_HEIGHT);
+    eprintln!("[diag] add_balls spawn at ({:.1},{:.1})", x, y);
+
+    // Perform the proximity query using a shape (not a Collider component)
+    let query_shape = bevy_rapier2d::parry::shape::Ball::new(BALL_RADIUS);
+    let mut hit = false;
+    ctx.intersect_shape(
+        Vec2::new(x, y),
+        0.0,
+        &query_shape,
+        QueryFilter::default(),
+        |_entity| { hit = true; false }
     );
-
-    let circle_shape = Collider::ball(BALL_RADIUS);
-
-    // Perform the proximity query
-    let first_hit =
-        rapier_context.intersection_with_shape(
-            Vec2::new(x, y),
-            0.0,
-            &circle_shape,
-            QueryFilter::default(),
-        );
-    if first_hit.is_some() {
-        return;
-    }
+    if hit { return; }
 
     // update our timer with the time elapsed since the last update
     // if that caused the timer to finish, we say hello to everyone
-    commands.spawn((
-        ball,
-        RigidBody::Dynamic,
-        circle_shape,
-        ColliderMassProperties::Density(0.001),
-        Friction::coefficient(0.7),
-        Velocity {
-            linvel: linearvelocity * PIXELS_PER_METER,
-            angvel: 0.0,
-        },
-        ActiveEvents::CONTACT_FORCE_EVENTS,
-        // Ccd::enabled(),
-        Restitution::new(0.1),
-        MaterialMesh2dBundle {
-            mesh: mesh_assets.ball_circle.clone().into(),
-            material: materials.add(color_material),
-            transform: Transform::from_xyz(x, y, 1.0),
-            ..MaterialMesh2dBundle::default()
-        },
-    ));
+    // Spawn physics parent (no render) and a render child (pure sprite)
+    let _parent = commands
+        .spawn((
+            ball,
+            RigidBody::Dynamic,
+            circle_collider,
+            ColliderMassProperties::Density(0.001),
+            Friction::coefficient(0.7),
+            Velocity {
+                linvel: linearvelocity * PIXELS_PER_METER,
+                angvel: 0.0,
+            },
+            ActiveEvents::CONTACT_FORCE_EVENTS,
+            Restitution::new(0.1),
+            // Ensure visibility hierarchy is established for the render child
+            bevy::render::view::Visibility::Visible,
+            bevy::render::view::InheritedVisibility::VISIBLE,
+            Transform::from_xyz(x, y, 0.0),
+            GlobalTransform::default(),
+            RenderLayers::layer(1),
+        ))
+        .id();
+    // Use a smaller bright sprite to reduce occlusion risk
+    let child = commands
+        .spawn((
+            Mesh2d(mesh_assets.ball_circle.clone()),
+            MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(300.0, 1.0, 0.5)))),
+            bevy::render::view::Visibility::Visible,
+            bevy::prelude::InheritedVisibility::VISIBLE,
+            Transform::from_xyz(0.0, 0.0, 50.0),
+            bevy::render::view::NoFrustumCulling,
+            RenderLayers::from_layers(&[0, 1]),
+            BallRender { parent: _parent },
+        ))
+        .id();
+    eprintln!("[diag] spawned BallRender child {child:?} for parent {_parent:?} at ({x:.1},{y:.1})");
+    commands.entity(_parent).add_child(child);
+    // TEMP DEBUG: Also spawn a bright square sprite marker co-parented to move with the ball
+    let marker = commands
+        .spawn((
+            bevy::sprite::Sprite::from_color(Color::hsl(60.0, 1.0, 0.6), Vec2::new(30.0, 30.0)),
+            bevy::render::view::Visibility::Visible,
+            bevy::render::view::InheritedVisibility::VISIBLE,
+            Transform::from_xyz(0.0, 0.0, 30.0),
+            bevy::render::view::NoFrustumCulling,
+            RenderLayers::layer(1),
+        ))
+        .id();
+    commands.entity(_parent).add_child(marker);
 }
 
 const MAX_JOINTS: usize = 10;
@@ -577,15 +622,18 @@ fn already_has_max_pairwise_joints(
 
 fn contacts(
     mut commands: Commands,
-    rapier_context: Res<RapierContext>,
+    rapier: bevy_rapier2d::prelude::ReadRapierContext,
+    // Obtain context once; if absent, bail early
     mut contact_force_collisions: EventReader<ContactForceEvent>,
     q_balls: Query<&mut Ball>,
     q_children_for_balls: Query<&Children, With<Ball>>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
     q_velocities: Query<&Velocity>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
-    q_color_material_handles: Query<&Handle<ColorMaterial>>,
+    q_color_material_handles: Query<&MeshMaterial2d<ColorMaterial>>,
 ) {
+    let Ok(ctx) = rapier.single() else { return; };
+
     for ContactForceEvent {
         collider1,
         collider2,
@@ -672,7 +720,7 @@ fn contacts(
         }
 
         // If the contact pair exists, that means that the broad-phase identified a potential contact.
-        let contact_pair = match rapier_context.contact_pair(collider1, collider2) {
+        let contact_pair = match ctx.contact_pair(collider1, collider2) {
             Some(contact_pair) => contact_pair,
             None => continue,
         };
@@ -721,13 +769,13 @@ fn contacts(
             ))
             .id();
 
-        commands.entity(collider2).push_children(&[child]);
+        commands.entity(collider2).add_child(child);
     }
 }
 
 fn unstick(
     mut commands: Commands,
-    context: ResMut<RapierContext>,
+    rapier: bevy_rapier2d::prelude::ReadRapierContext,
     q_children_for_balls_with_children: Query<&Children, With<Ball>>,
     q_rapier_handles_with_bevy_impulse_joints: Query<
         &RapierImpulseJointHandle,
@@ -741,7 +789,8 @@ fn unstick(
                 Err(_) => continue,
             };
             let bevy_impulse_joint_entity = child_entity;
-            let rapier_joint = match context.impulse_joints.get(rapier_handle.0) {
+            let Ok(ctx) = rapier.single() else { continue; };
+            let rapier_joint = match ctx.joints.impulse_joints.get(rapier_handle.0) {
                 Some(rapier_joint) => rapier_joint,
                 None => continue,
             };
@@ -751,47 +800,160 @@ fn unstick(
                     // print!("-");
                     commands
                         .entity(*bevy_impulse_joint_entity)
-                        .despawn_recursive();
+                        .despawn();
                 }
             }
         }
     }
 }
 
+// Heartbeat to confirm Update schedule is running (stderr)
+fn headless_heartbeat(headless: Option<Res<crate::setup::Headless>>, time: Res<Time>) {
+    let is_headless = headless.map(|h| h.0).unwrap_or(false);
+    if !is_headless {
+        return;
+    }
+    static mut ACCUM: f32 = 0.0;
+    let dt = time.delta_secs();
+    unsafe {
+        ACCUM += dt;
+        if ACCUM >= 1.0 {
+            eprintln!("[diag] heartbeat");
+            ACCUM = 0.0;
+        }
+    }
+}
+
 pub struct BallPlugin;
+
+// Diagnostic: spawn a simple, no-physics ball via BallPlugin to test offscreen visibility
+fn spawn_debug_simple_ball(
+    mut commands: Commands,
+    headless: Option<Res<crate::setup::Headless>>,
+    video_req: Option<Res<crate::setup::VideoExportRequest>>,
+    mut spawned: Local<bool>,
+    mesh_assets: Option<Res<crate::setup::MeshAssets2d>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    if *spawned { return; }
+    let is_headless = headless.map(|h| h.0).unwrap_or(false);
+    let has_video = video_req.is_some();
+    let Some(mesh_assets) = mesh_assets else { return; };
+    if !(is_headless && has_video) { return; }
+
+    let x = -200.0;
+    let y = 1800.0;
+    let material = materials.add(ColorMaterial::from(Color::hsl(120.0, 1.0, 0.5)));
+    commands.spawn((
+        Mesh2d(mesh_assets.ball_circle.clone()),
+        MeshMaterial2d(material),
+        bevy::render::view::Visibility::Visible,
+        bevy::render::view::InheritedVisibility::VISIBLE,
+        Transform::from_xyz(x, y, 2.0),
+        RenderLayers::layer(1),
+    ));
+    eprintln!("[diag] spawned debug simple ball at ({:.1},{:.1})", x, y);
+    *spawned = true;
+}
 
 impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(
             NewBallsTimer(Timer::from_seconds(2.0, TimerMode::Repeating)),
-            // NewBallsTimer(Timer::from_seconds(1.5, TimerMode::Repeating)),
         )
         .insert_resource(ReproduceBallsTimer(Timer::from_seconds(
             0.025,
             TimerMode::Repeating,
         )))
-        .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(
-            0.5,
-            TimerMode::Repeating,
-        )))
+        .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
         // Periodic debug logging of ball count (every ~2s)
-        .add_systems(Update, ball_count_logger)
-        .add_systems(
-            Update,
-            (
-                add_balls,
-                contacts,
-                unstick,
-                reproduce_balls,
-                update_life_points,
-            ),
-        );
+        .add_systems(Update, (ball_count_logger, headless_heartbeat))
+        // Also log BallRender companions
+        .add_systems(Update, ball_render_logger)
+        // TEMP DEBUG: mirror the first Ball as a bright Sprite to eliminate Mesh2d/material as a factor
+        .add_systems(Update, update_ball_debug_mirror)
+        // Ensure spawn -> transforms/visibility -> extract ordering
+        // Move to Update so the render extract sees them earlier this frame
+        .add_systems(Update, (add_balls, reproduce_balls))
+        .add_systems(Update, contacts)
+        .add_systems(Update, unstick)
+        .add_systems(Update, update_life_points)
+        // Diagnostic: spawn a simple ball via the same plugin
+        .add_systems(Update, spawn_debug_simple_ball);
     }
 }
 
+#[derive(Component)]
+struct BallDebugMirror;
+
+// Spawns a single bright Sprite that tracks the first Ball's position.
+// This bypasses Mesh2d/Material2d, parenting, and z-order complexities.
+fn update_ball_debug_mirror(
+    mut commands: Commands,
+    mut marker: Local<Option<Entity>>,
+    q_balls: Query<&GlobalTransform, With<Ball>>,
+    mut q_marker_tf: Query<&mut Transform, With<BallDebugMirror>>,
+) {
+    // Track the first ball if any
+    let first_ball = q_balls.iter().next().copied();
+    match (*marker, first_ball) {
+        (None, Some(gt)) => {
+            let pos = gt.translation();
+            let e = commands
+                .spawn((
+                    bevy::sprite::Sprite::from_color(Color::hsl(60.0, 1.0, 0.6), Vec2::new(60.0, 60.0)),
+                    bevy::render::view::Visibility::Visible,
+                    bevy::render::view::visibility::InheritedVisibility::VISIBLE,
+                    // Put well above pegs/walls
+                    Transform::from_xyz(pos.x, pos.y, 40.0),
+                    bevy::render::view::NoFrustumCulling,
+                    RenderLayers::layer(1),
+                    BallDebugMirror,
+                ))
+                .id();
+            *marker = Some(e);
+        }
+        (Some(e), Some(gt)) => {
+            if let Ok(mut tf) = q_marker_tf.get_mut(e) {
+                let p = gt.translation();
+
+                tf.translation.x = p.x;
+                tf.translation.y = p.y;
+                tf.translation.z = 40.0;
+            }
+        }
+        // No balls yet: do nothing
+        _ => {}
+    }
+}
+
+fn ball_render_logger(
+    q: Query<(Entity, &GlobalTransform, Option<&bevy::render::view::visibility::ViewVisibility>, Option<&bevy::render::view::visibility::InheritedVisibility>), With<BallRender>>,
+    time: Res<Time>,
+) {
+    static mut ACC: f32 = 0.0;
+    let dt = time.delta_secs();
+    unsafe {
+        ACC += dt;
+        if ACC >= 1.0 {
+            let count = q.iter().count();
+            let mut it = q.iter();
+            let sample = it.next().map(|(_e, g, vv, iv)| {
+                let t = g.translation();
+                let vv = vv.map(|v| v.get()).unwrap_or(false);
+                let iv = iv.map(|v| v.get()).unwrap_or(true);
+                ((t.x, t.y, t.z), vv, iv)
+            });
+            eprintln!("[diag] ball_render: count={count} sample={sample:?}");
+            ACC = 0.0;
+        }
+    }
+}
+
+
 fn ball_count_logger(q: Query<Entity, With<Ball>>, time: Res<Time>) {
     static mut ACCUM: f32 = 0.0;
-    let dt = time.delta_seconds();
+    let dt = time.delta_secs();
     unsafe {
         ACCUM += dt;
         if ACCUM >= 2.0 {
@@ -800,3 +962,5 @@ fn ball_count_logger(q: Query<Entity, With<Ball>>, time: Res<Time>) {
         }
     }
 }
+
+

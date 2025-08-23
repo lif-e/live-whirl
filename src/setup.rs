@@ -1,50 +1,18 @@
 use bevy::{
+
     prelude::{
-        App,
-        Assets,
-        Camera,
-        Camera2dBundle,
-        Color,
-        Commands,
-        Component,
-        // default,
-        Mesh,
-        Handle,
-        OrthographicProjection,
-        Plugin,
-        ResMut,
-        Resource,
-        Startup,
-        Transform,
-        Res,
-        Vec2,
+        App, Assets, Camera, Camera2d, Color, Commands, Component, Handle, Image, Mesh,
+        Plugin, Query, Res, ResMut, Resource, Startup, Update, Transform, Local, Vec2, With, PostUpdate, Time,
     },
-
-    core_pipeline::{
-        bloom::{
-            BloomCompositeMode,
-            BloomPrefilterSettings,
-            BloomSettings,
-        },
-        tonemapping::Tonemapping,
-    },
-    sprite::{
-        ColorMaterial,
-        MaterialMesh2dBundle,
-    },
-
-
     render::{
-        render_resource::{
-            Extent3d,
-            TextureDimension,
-            TextureFormat,
-            TextureUsages,
-        },
-        texture,
+        prelude::Mesh2d,
+        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+        view::RenderLayers,
     },
+    sprite::{ColorMaterial, MeshMaterial2d},
 };
 use bevy_rapier2d::{
+    plugin::TimestepMode,
     prelude::{
         Collider,
         // DebugRenderMode,
@@ -53,7 +21,6 @@ use bevy_rapier2d::{
         // RapierDebugRenderPlugin,
         RapierPhysicsPlugin,
     },
-    plugin::TimestepMode,
 };
 // use bevy_image_export::{
 //     ImageExportBundle,
@@ -61,13 +28,16 @@ use bevy_rapier2d::{
 //     ImageExportSource,
 //     ImageExportSettings,
 // };
-use rand::{
-    rngs::StdRng,
-    SeedableRng, Rng,
-};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
-use crate::shared_consts::PIXELS_PER_METER;
 use crate::ball::BALL_RADIUS;
+use crate::shared_consts::PIXELS_PER_METER;
+
+#[derive(Resource)]
+pub struct DebugOverlay(pub bool);
+
+#[derive(Component)]
+struct OffscreenOverlay;
 
 #[derive(Resource)]
 pub struct RngResource {
@@ -83,33 +53,53 @@ pub struct MeshAssets2d {
 pub struct Headless(pub bool);
 
 pub fn setup_meshes(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
-    let circle = meshes.add(bevy::math::primitives::Circle::new(super::ball::BALL_RADIUS));
-    commands.insert_resource(MeshAssets2d { ball_circle: circle });
+    let circle = meshes.add(bevy::math::primitives::Circle::new(
+        super::ball::BALL_RADIUS,
+    ));
+    commands.insert_resource(MeshAssets2d {
+        ball_circle: circle,
+    });
 }
 
 #[derive(Resource, Default, Clone, Copy)]
-pub struct VideoExportRequest { pub width: u32, pub height: u32, pub fps: u32 }
+pub struct VideoExportRequest {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+}
+
+use crate::camera_tuning::OffscreenCam;
 
 pub fn setup_graphics(
     mut commands: Commands,
-    mut rapier_config: ResMut<RapierConfiguration>,
+    mut rapier_config_q: Query<&mut RapierConfiguration, With<bevy_rapier2d::plugin::context::DefaultRapierContext>>,
+    mut timestep_mode: ResMut<TimestepMode>,
     headless: Option<Res<Headless>>,
-    mut images: ResMut<Assets<texture::Image>>,
+    mut images: ResMut<Assets<Image>>,
     video_req: Option<Res<VideoExportRequest>>,
 ) {
     let has_video = video_req.is_some();
-    let export = video_req.as_deref().copied().unwrap_or(VideoExportRequest { width: 1080, height: 1920, fps: 60 });
+    let export = video_req.as_deref().copied().unwrap_or(VideoExportRequest {
+        width: 1080,
+        height: 1920,
+        fps: 60,
+    });
 
-    let mut offscreen_handle_opt: Option<Handle<texture::Image>> = None;
+    let mut offscreen_handle_opt: Option<Handle<Image>> = None;
     if has_video {
-        let mut offscreen_image = texture::Image::new_fill(
-            Extent3d { width: export.width, height: export.height, depth_or_array_layers: 1 },
+        let mut offscreen_image = Image::new_fill(
+            Extent3d {
+                width: export.width,
+                height: export.height,
+                depth_or_array_layers: 1,
+            },
             TextureDimension::D2,
-            &vec![0u8; (export.width * export.height * 4) as usize],
+            &[0u8; 4],
             TextureFormat::Rgba8UnormSrgb,
             bevy::render::render_asset::RenderAssetUsages::RENDER_WORLD,
         );
-        offscreen_image.texture_descriptor.usage = TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT;
+        offscreen_image.texture_descriptor.usage |=
+            TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
         let offscreen_handle = images.add(offscreen_image);
         commands.insert_resource(crate::capture::OffscreenTargetRender {
             handle: offscreen_handle.clone(),
@@ -120,7 +110,6 @@ pub fn setup_graphics(
     }
 
     let is_headless = matches!(headless.as_deref(), Some(Headless(true)));
-
 
     // // Create an output texture.
     // let output_texture_handle = {
@@ -149,86 +138,102 @@ pub fn setup_graphics(
     //     images.add(export_texture)
     // };
 
-    // rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625);
-    rapier_config.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625 * 100.0);
-    rapier_config.timestep_mode = TimestepMode::Fixed {
-        // The physics simulation will be advanced by this total amount at each Bevy tick.
+    if let Ok(mut rc) = rapier_config_q.single_mut() {
+        rc.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625 * 100.0);
+    }
+    *timestep_mode = TimestepMode::Fixed {
         dt: 1.0 / 60.0,
-        // This number of substeps of length `dt / substeps` will be performed at each Bevy tick.
         substeps: 1,
     };
 
     if !is_headless {
-        commands.spawn((
-            Camera2dBundle {
-                camera: Camera { hdr: true, ..Camera::default() },
-                tonemapping: Tonemapping::TonyMcMapface,
-                projection: OrthographicProjection {
-                    near: -1000.,
-                    scale: 4.0,
-                    ..OrthographicProjection::default()
-                },
-                ..Camera2dBundle::default()
-            },
-            BloomSettings {
-                intensity: 0.27848008 / 4.0,
-                low_frequency_boost: 0.35,
-                low_frequency_boost_curvature: 0.91,
-                high_pass_frequency: 1.0,
-                composite_mode: BloomCompositeMode::EnergyConserving,
-                prefilter_settings : BloomPrefilterSettings { threshold: 0.0, threshold_softness: 0.0 },
-                ..BloomSettings::default()
-            },
-        ));
+        use bevy::render::camera::ClearColorConfig;
+        // Spawn a windowed camera that matches the offscreen framing and layers
+        let scale_x = GROUND_WIDTH / export.width as f32;
+        let scale_y = WALL_HEIGHT / export.height as f32;
+        let fit_scale = scale_x.max(scale_y);
+        let center_x = 0.5 * (WALL_BOX.min_x + WALL_BOX.max_x);
+        let center_y = 0.5 * (WALL_BOX.min_y + WALL_BOX.max_y);
+        let mut cam = Camera { hdr: false, ..Default::default() };
+        cam.clear_color = ClearColorConfig::Custom(Color::srgba(0.17, 0.18, 0.19, 1.0));
+        let win_cam = commands.spawn((
+            Camera2d,
+            cam,
+            Transform::from_xyz(center_x, center_y, 1000.0),
+            RenderLayers::from_layers(&[0, 1]),
+        )).id();
+        // Match the zoom used for offscreen (slightly beyond fit)
+        use bevy::render::camera::{Projection, OrthographicProjection};
+        let mut ortho = OrthographicProjection::default_2d();
+        ortho.scale = fit_scale * 1.1;
+        commands.entity(win_cam).insert(Projection::Orthographic(ortho));
     }
+
+    // Always include a minimal debug overlay marker we can draw if desired; enable in video mode
+    commands.insert_resource(DebugOverlay(has_video));
 
     if let Some(offscreen_handle) = &offscreen_handle_opt {
-        use bevy::render::camera::RenderTarget;
-        // Spawn a 2D camera targeting the offscreen image; no window required
-        let scale_x = export.width as f32 / GROUND_WIDTH;
-        let scale_y = export.height as f32 / WALL_HEIGHT;
-        let fit_scale = scale_x.min(scale_y);
+        let is_headless = matches!(headless.as_deref(), Some(Headless(true)));
 
-        commands.spawn((
-            Camera2dBundle {
-                camera: Camera {
-                    hdr: true, // match windowed pipeline; HDR required for bloom
-                    target: RenderTarget::Image(offscreen_handle.clone()),
-                    ..Default::default()
-                },
-                tonemapping: Tonemapping::TonyMcMapface,
-                projection: OrthographicProjection {
-                    near: -1000.,
-                    scale: 4.0, // match windowed camera scale for identical framing
-                    ..Default::default()
-                },
-                transform: Transform::from_xyz(0.0, 0.0, 1000.0),
-                ..Default::default()
-            },
-            BloomSettings {
-                intensity: 0.27848008 / 4.0,
-                low_frequency_boost: 0.35,
-                low_frequency_boost_curvature: 0.91,
-                high_pass_frequency: 1.0,
-                composite_mode: BloomCompositeMode::EnergyConserving,
-                prefilter_settings : BloomPrefilterSettings { threshold: 0.0, threshold_softness: 0.0 },
-                ..BloomSettings::default()
-            },
-        ));
+        let scale_x = GROUND_WIDTH / export.width as f32;
+        let scale_y = WALL_HEIGHT / export.height as f32;
+        let fit_scale = scale_x.max(scale_y);
+        let center_x = 0.5 * (WALL_BOX.min_x + WALL_BOX.max_x);
+        let center_y = 0.5 * (WALL_BOX.min_y + WALL_BOX.max_y);
+
+        // Offscreen camera centered on playfield, with orthographic scale set to fit entire area
+        use bevy::math::UVec2;
+        use bevy::render::camera::Viewport;
+        use bevy::render::camera::ClearColorConfig;
+        let mut cam = Camera { hdr: false, target: bevy::render::camera::RenderTarget::Image(offscreen_handle.clone().into()), order: 1, ..Default::default() };
+        cam.clear_color = ClearColorConfig::Custom(Color::srgba(0.17, 0.18, 0.19, 1.0));
+        cam.viewport = Some(Viewport { physical_position: UVec2::new(0, 0), physical_size: UVec2::new(export.width, export.height), depth: 0.0..1.0 });
+        let off_cam = commands.spawn((
+            Camera2d,
+            cam,
+            Transform::from_xyz(center_x, center_y, 1000.0),
+            RenderLayers::from_layers(&[0, 1]),
+            OffscreenCam,
+        )).id();
+        // Explicitly set orthographic scale to match windowed fit
+        {
+            use bevy::render::camera::{Projection, OrthographicProjection};
+            let mut ortho = OrthographicProjection::default_2d();
+            ortho.scale = fit_scale * 1.1;
+            commands.entity(off_cam).insert(Projection::Orthographic(ortho));
+        }
+
+        // Force 5 debug sprites at the exact offscreen center in headless+video
+        if is_headless && has_video {
+            use bevy::sprite::Sprite;
+            eprintln!("[diag] spawning 5 center debug sprites at ({center_x:.1},{center_y:.1})");
+            for i in 0..5u32 {
+                let dx = (i as f32 - 2.0) * 40.0;
+                commands.spawn((
+                    Sprite::from_color(Color::hsl(0.0 + 30.0 * i as f32, 1.0, 0.6), Vec2::new(48.0, 48.0)),
+                    bevy::render::view::Visibility::Visible,
+                    bevy::prelude::InheritedVisibility::VISIBLE,
+                    Transform::from_xyz(center_x + dx, center_y, 40.0),
+                    bevy::render::view::NoFrustumCulling,
+                ));
+            }
+        }
+
+        // Provide desired ortho scale so camera_tuning system applies it next frame
+        commands.insert_resource(crate::camera_tuning::OrthoScale(fit_scale * 1.1));
     }
-
-
-
-    // commands.spawn(ImageExportBundle {
-    //     source: export_sources.add(output_texture_handle.into()),
-    //     settings: ImageExportSettings {
-    //         // Frames will be saved to "./out/[#####].png".
-    //         output_dir: "out".into(),
-    //         // Choose "exr" for HDR renders.
-    //         extension: "png".into(),
-    //     },
-    // });
 }
+
+fn wiggle_offscreen_overlay(time: Res<Time>, mut q: Query<&mut Transform, With<OffscreenOverlay>>) {
+    let t = time.elapsed_secs_wrapped();
+    let dx = (t * 2.0).sin() * 10.0; // 10px left-right
+    for mut tf in &mut q {
+        tf.translation.x = tf.translation.x.signum() * tf.translation.x.abs().max(1.0) + dx;
+    }
+}
+
+// Blink overlay removed (was causing strobe). Keeping code here for reference if needed:
+// struct BlinkOverlay; ...
 
 pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER * 1.62068966;
 pub const GROUND_WIDTH: f32 = 8.0 * PIXELS_PER_METER;
@@ -236,10 +241,17 @@ pub const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
 
 const GROUND_POSITION: f32 = -0.5 * WALL_HEIGHT;
 
-struct Box2D { min_x: f32, max_x: f32, min_y: f32, max_y: f32, min_z: f32, max_z: f32 }
+struct Box2D {
+    min_x: f32,
+    max_x: f32,
+    min_y: f32,
+    max_y: f32,
+    min_z: f32,
+    max_z: f32,
+}
 const WALL_BOX: Box2D = Box2D {
     min_x: -0.5 * GROUND_WIDTH,
-    max_x:  0.5 * GROUND_WIDTH,
+    max_x: 0.5 * GROUND_WIDTH,
     min_y: GROUND_POSITION,
     max_y: WALL_HEIGHT + GROUND_POSITION,
     min_z: 0.0,
@@ -254,6 +266,38 @@ impl Default for Wall {
         Self
     }
 }
+
+// Spawn a single bright test ball in headless+video to validate offscreen rendering
+pub(crate) fn spawn_headless_test_ball(
+    mut commands: Commands,
+    headless: Option<Res<Headless>>,
+    video_req: Option<Res<VideoExportRequest>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mesh_assets: Option<Res<MeshAssets2d>>,
+    mut spawned: Local<bool>,
+) {
+    if *spawned { return; }
+    let is_headless = matches!(headless.as_deref(), Some(Headless(true)));
+    let has_video = video_req.is_some();
+    let Some(mesh_assets) = mesh_assets else { return; };
+    if !(is_headless && has_video) { return; }
+
+    let x = 0.0;
+    let y = 0.25 * WALL_HEIGHT;
+    let material = materials.add(ColorMaterial::from(Color::hsl(120.0, 1.0, 0.5)));
+
+    commands.spawn((
+        Mesh2d(mesh_assets.ball_circle.clone()),
+        MeshMaterial2d(material),
+        bevy::render::view::Visibility::Visible,
+        bevy::render::view::InheritedVisibility::VISIBLE,
+        Transform::from_xyz(x, y, 2.0),
+        RenderLayers::layer(1),
+    ));
+    eprintln!("[diag] spawned headless test ball at ({:.1},{:.1})", x, y);
+    *spawned = true;
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
 pub struct Peg;
@@ -271,41 +315,31 @@ pub fn setup_whirl(
     mut rng_resource: ResMut<RngResource>,
 ) {
     let rng = &mut rng_resource.rng;
-    let mut add_wall = |
-        size: Vec2,
-        position: Vec2,
-    | {
-        commands
-            .spawn((
-                Wall::default(),
-                Collider::cuboid(size.x / 2.0, size.y / 2.0),
-                MaterialMesh2dBundle {
-                    mesh: meshes.add(bevy::math::primitives::Rectangle::from_size(size)).into(),
-                    material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
-                    transform: Transform::from_xyz(position.x, position.y, 0.0),
-                    ..MaterialMesh2dBundle::default()
-                },
-            ));
+    let mut add_wall = |size: Vec2, position: Vec2| {
+        commands.spawn((
+            Wall::default(),
+            Collider::cuboid(size.x / 2.0, size.y / 2.0),
+            Mesh2d(meshes.add(bevy::math::primitives::Rectangle::from_size(size))),
+            MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0)))),
+            bevy::render::view::Visibility::Visible,
+            bevy::render::view::InheritedVisibility::VISIBLE,
+            Transform::from_xyz(position.x, position.y, 0.0),
+            RenderLayers::layer(1),
+        ));
     };
     println!("Setting up whirl");
     const VERTICAL_WALLS_SIZE: Vec2 = Vec2::new(WALL_BOX.max_x - WALL_BOX.min_x, WALL_THICKNESS);
     const HORIZONTAL_WALLS_SIZE: Vec2 = Vec2::new(WALL_THICKNESS, WALL_BOX.max_y - WALL_BOX.min_y);
     add_wall(
         VERTICAL_WALLS_SIZE,
-        Vec2 { x: 0.0, y: WALL_BOX.min_y },
+        Vec2 {
+            x: 0.0,
+            y: WALL_BOX.min_y,
+        },
     );
-    add_wall(
-        VERTICAL_WALLS_SIZE,
-        Vec2::new(0.0, WALL_BOX.max_y),
-    );
-    add_wall(
-        HORIZONTAL_WALLS_SIZE,
-        Vec2::new(WALL_BOX.min_x, 0.0),
-    );
-    add_wall(
-        HORIZONTAL_WALLS_SIZE,
-        Vec2::new(WALL_BOX.max_x, 0.0),
-    );
+    add_wall(VERTICAL_WALLS_SIZE, Vec2::new(0.0, WALL_BOX.max_y));
+    add_wall(HORIZONTAL_WALLS_SIZE, Vec2::new(WALL_BOX.min_x, 0.0));
+    add_wall(HORIZONTAL_WALLS_SIZE, Vec2::new(WALL_BOX.max_x, 0.0));
 
     const HORIZONTAL_SPACING: f32 = 0.5 * PIXELS_PER_METER;
     const VERTICAL_SPACING: f32 = 0.5 * PIXELS_PER_METER;
@@ -316,36 +350,38 @@ pub fn setup_whirl(
         let x = (i as f32 * HORIZONTAL_SPACING) - (0.5 * GROUND_WIDTH);
         for j in 1..SPACED_HEIGHT {
             let y = j as f32 * VERTICAL_SPACING + GROUND_POSITION;
-            let row_shift: f32 = if j % 2 == 1 { 0.0 } else { HORIZONTAL_SPACING / 2.0 };
-            if i == 0 && row_shift == 0.0 { continue; }
+            let row_shift: f32 = if j % 2 == 1 {
+                0.0
+            } else {
+                HORIZONTAL_SPACING / 2.0
+            };
+            if i == 0 && row_shift == 0.0 {
+                continue;
+            }
             let size = Vec2::new(BALL_RADIUS, BALL_RADIUS);
             let position = Vec2::new(x + row_shift, y);
-            commands
-                .spawn((
-                    Peg::default(),
-                    Collider::cuboid(size.x / 2.0, size.y / 2.0),
-                    MaterialMesh2dBundle {
-                        mesh: meshes.add(bevy::math::primitives::Rectangle::from_size(size)).into(),
-                        material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
-                        transform: Transform::from_xyz(position.x, position.y, 0.0),
-                        ..MaterialMesh2dBundle::default()
-                    },
-                ));
+            commands.spawn((
+                Peg::default(),
+                Collider::cuboid(size.x / 2.0, size.y / 2.0),
+                Mesh2d(meshes.add(bevy::math::primitives::Rectangle::from_size(size))),
+                MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0)))),
+                // Raise pegs to z=2 so they are above the walls (z=0) like balls
+                Transform::from_xyz(position.x, position.y, 2.0),
+            ));
             let is_pocket = (i != SPACED_WIDTH) && rng.gen_range(0.0, 1.0) < 0.025;
             if is_pocket {
                 let size = Vec2::new(BALL_RADIUS * 6.0, BALL_RADIUS);
-                let position = Vec2::new(x + row_shift + (HORIZONTAL_SPACING / 2.0), y - (VERTICAL_SPACING / 3.0));
-                commands
-                    .spawn((
-                        Peg::default(),
-                        Collider::cuboid(size.x / 2.0, size.y / 2.0),
-                        MaterialMesh2dBundle {
-                            mesh: meshes.add(bevy::math::primitives::Rectangle::from_size(size)).into(),
-                            material: materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0))),
-                            transform: Transform::from_xyz(position.x, position.y, 0.0),
-                            ..MaterialMesh2dBundle::default()
-                        },
-                    ));
+                let position = Vec2::new(
+                    x + row_shift + (HORIZONTAL_SPACING / 2.0),
+                    y - (VERTICAL_SPACING / 3.0),
+                );
+                commands.spawn((
+                    Peg::default(),
+                    Collider::cuboid(size.x / 2.0, size.y / 2.0),
+                    Mesh2d(meshes.add(bevy::math::primitives::Rectangle::from_size(size))),
+                    MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0)))),
+                    Transform::from_xyz(position.x, position.y, 0.0),
+                ));
             }
         }
     }
@@ -355,8 +391,7 @@ pub struct SetupPlugin;
 
 impl Plugin for SetupPlugin {
     fn build(&self, app: &mut App) {
-        app
-        .insert_resource(RngResource {
+        app.insert_resource(RngResource {
             rng: StdRng::seed_from_u64(42),
         })
         .add_plugins((
@@ -375,15 +410,12 @@ impl Plugin for SetupPlugin {
             //     ..RapierDebugRenderPlugin::default()
             // },
         ))
-        .add_systems(
-            Startup,
-            (
-                setup_meshes,
-                setup_graphics,
-
-                setup_whirl,
-            ),
-        )
-        ;
+        .add_systems(Startup, setup_meshes)
+        .add_systems(Startup, setup_graphics)
+        .add_systems(PostUpdate, crate::camera_tuning::set_ortho_scale_after_spawn)
+        .add_systems(Startup, setup_whirl)
+        .add_systems(Update, spawn_headless_test_ball)
+        // TEMP DEBUG: wiggle the offscreen overlay slightly to prove dynamic rendering in offscreen target
+        .add_systems(Update, wiggle_offscreen_overlay);
     }
 }
