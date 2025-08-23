@@ -33,6 +33,7 @@ use bevy::{
         MaterialMesh2dBundle,
     },
 
+
     render::{
         render_resource::{
             Extent3d,
@@ -188,21 +189,34 @@ pub fn setup_graphics(
         let scale_y = export.height as f32 / WALL_HEIGHT;
         let fit_scale = scale_x.min(scale_y);
 
-        commands.spawn(Camera2dBundle {
-            camera: Camera {
-                hdr: false,
-                target: RenderTarget::Image(offscreen_handle.clone()),
+        commands.spawn((
+            Camera2dBundle {
+                camera: Camera {
+                    hdr: true, // match windowed pipeline; HDR required for bloom
+                    target: RenderTarget::Image(offscreen_handle.clone()),
+                    ..Default::default()
+                },
+                tonemapping: Tonemapping::TonyMcMapface,
+                projection: OrthographicProjection {
+                    near: -1000.,
+                    scale: 4.0, // match windowed camera scale for identical framing
+                    ..Default::default()
+                },
+                transform: Transform::from_xyz(0.0, 0.0, 1000.0),
                 ..Default::default()
             },
-            projection: OrthographicProjection {
-                near: -1000.,
-                scale: fit_scale,
-                ..Default::default()
+            BloomSettings {
+                intensity: 0.27848008 / 4.0,
+                low_frequency_boost: 0.35,
+                low_frequency_boost_curvature: 0.91,
+                high_pass_frequency: 1.0,
+                composite_mode: BloomCompositeMode::EnergyConserving,
+                prefilter_settings : BloomPrefilterSettings { threshold: 0.0, threshold_softness: 0.0 },
+                ..BloomSettings::default()
             },
-            transform: Transform::from_xyz(0.0, 0.0, 1000.0),
-            ..Default::default()
-        });
+        ));
     }
+
 
 
     // commands.spawn(ImageExportBundle {
@@ -366,6 +380,7 @@ impl Plugin for SetupPlugin {
             (
                 setup_meshes,
                 setup_graphics,
+
                 setup_whirl,
             ),
         )

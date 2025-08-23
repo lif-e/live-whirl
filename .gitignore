@@ -8,3 +8,12 @@ target/
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+
+# Frame Dumps
+frame_*
+
+# MP4 Exports
+*.mp4
+
+# Logs
+run.log

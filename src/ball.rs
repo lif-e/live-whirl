@@ -4,6 +4,7 @@ use rand::{
 };
 use std::f32::consts::PI;
 
+use std::io::{stdout, Write};
 use bevy::{
     asset::Handle,
     color::Hsla,
@@ -411,7 +412,7 @@ fn reproduce_balls(
                 mesh: meshes.add(Circle::new(radius)).into(),
                 // 4. Put something bright in a dark environment to see the effect
                 material: color_materials.add(child_color_material),
-                transform: Transform::from_xyz(new_ball_x, new_ball_y, 0.0),
+                transform: Transform::from_xyz(new_ball_x, new_ball_y, 1.0),
                 ..MaterialMesh2dBundle::default()
             },
         ));
@@ -456,11 +457,11 @@ fn add_balls(
     let rng = &mut rng_resource.rng;
     let linearvelocity: Vec2 = Vec2::new(
         rng.gen_range(
-            MIN_LINEAR_VELOCITY.x, 
+            MIN_LINEAR_VELOCITY.x,
             MAX_LINEAR_VELOCITY.x,
         ),
         rng.gen_range(
-            MIN_LINEAR_VELOCITY.y, 
+            MIN_LINEAR_VELOCITY.y,
             MAX_LINEAR_VELOCITY.y,
         ),
     );
@@ -470,24 +471,24 @@ fn add_balls(
         life_points: MAX_LIFE_POINTS,
         genome_max_age: rng.gen_range(90, 120),
         genome_relative_reproduction_rate: rng.gen_range(
-            0.00625 * 1.9, 
+            0.00625 * 1.9,
             0.00625 * 2.0,
         ),
         genome_bite_size: rng.gen_range(0, 400),
         genome_life_points_safe_to_reproduce: rng.gen_range(
-            0, 
+            0,
             1000,
         ),
         genome_energy_share_with_children: rng.gen_range(
-            0.25, 
+            0.25,
             0.75,
         ),
         genome_friendly_scent: Vec2::new(
-            rng.gen_range(-1.0, 1.0), 
+            rng.gen_range(-1.0, 1.0),
             rng.gen_range(-1.0, 1.0),
         ),
         genome_friendly_distance: rng.gen_range(
-            0.15, 
+            0.15,
             1.0,
         ),
     };
@@ -495,19 +496,10 @@ fn add_balls(
         ball.get_color(),
     );
 
-    let x = rng.gen_range(
-        SPAWN_BOX.min_x, 
-        SPAWN_BOX.max_x,
-    );
-    let y = rng.gen_range(
-        SPAWN_BOX.min_y, 
-        SPAWN_BOX.max_y,
-    );
-
     let circle_shape = Collider::ball(BALL_RADIUS);
 
     // Perform the proximity query
-    let first_hit = 
+    let first_hit =
         rapier_context.intersection_with_shape(
             Vec2::new(x, y),
             0.0,
@@ -535,9 +527,8 @@ fn add_balls(
         Restitution::new(0.1),
         MaterialMesh2dBundle {
             mesh: mesh_assets.ball_circle.clone().into(),
-            // 4. Put something bright in a dark environment to see the effect
             material: materials.add(color_material),
-            transform: Transform::from_xyz(x, y, 0.0),
+            transform: Transform::from_xyz(x, y, 1.0),
             ..MaterialMesh2dBundle::default()
         },
     ));
@@ -783,6 +774,8 @@ impl Plugin for BallPlugin {
             0.5,
             TimerMode::Repeating,
         )))
+        // Periodic debug logging of ball count (every ~2s)
+        .add_systems(Update, ball_count_logger)
         .add_systems(
             Update,
             (
@@ -793,5 +786,17 @@ impl Plugin for BallPlugin {
                 update_life_points,
             ),
         );
+    }
+}
+
+fn ball_count_logger(q: Query<Entity, With<Ball>>, time: Res<Time>) {
+    static mut ACCUM: f32 = 0.0;
+    let dt = time.delta_seconds();
+    unsafe {
+        ACCUM += dt;
+        if ACCUM >= 2.0 {
+            eprintln!("[diag] balls={}", q.iter().count());
+            ACCUM = 0.0;
+        }
     }
 }
