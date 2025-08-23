@@ -1,15 +1,43 @@
 use bevy::{
 
     prelude::{
-        App, Assets, Camera, Camera2d, Color, Commands, Component, Handle, Image, Mesh,
-        Plugin, Query, Res, ResMut, Resource, Startup, Update, Transform, Local, Vec2, With, PostUpdate, Time,
+        App,
+        Assets,
+        Camera,
+        Camera2d,
+        Color,
+        Commands,
+        Component,
+        Handle,
+        Image,
+        Mesh,
+        Plugin,
+        Query,
+        Res,
+        ResMut,
+        Resource,
+        Startup,
+        Update,
+        Transform,
+        Local,
+        Vec2,
+        With,
+        Time,
     },
     render::{
         prelude::Mesh2d,
-        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+        render_resource::{
+            Extent3d,
+            TextureDimension,
+            TextureFormat,
+            TextureUsages,
+        },
         view::RenderLayers,
     },
-    sprite::{ColorMaterial, MeshMaterial2d},
+    sprite::{
+        ColorMaterial,
+        MeshMaterial2d,
+    },
 };
 use bevy_rapier2d::{
     plugin::TimestepMode,
@@ -22,12 +50,6 @@ use bevy_rapier2d::{
         RapierPhysicsPlugin,
     },
 };
-// use bevy_image_export::{
-//     ImageExportBundle,
-
-//     ImageExportSource,
-//     ImageExportSettings,
-// };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::ball::BALL_RADIUS;
@@ -67,8 +89,6 @@ pub struct VideoExportRequest {
     pub height: u32,
     pub fps: u32,
 }
-
-use crate::camera_tuning::OffscreenCam;
 
 pub fn setup_graphics(
     mut commands: Commands,
@@ -165,7 +185,7 @@ pub fn setup_graphics(
         // Match the zoom used for offscreen (slightly beyond fit)
         use bevy::render::camera::{Projection, OrthographicProjection};
         let mut ortho = OrthographicProjection::default_2d();
-        ortho.scale = fit_scale * 1.1;
+        ortho.scale = fit_scale * 2.0;
         commands.entity(win_cam).insert(Projection::Orthographic(ortho));
     }
 
@@ -193,13 +213,12 @@ pub fn setup_graphics(
             cam,
             Transform::from_xyz(center_x, center_y, 1000.0),
             RenderLayers::from_layers(&[0, 1]),
-            OffscreenCam,
         )).id();
         // Explicitly set orthographic scale to match windowed fit
         {
             use bevy::render::camera::{Projection, OrthographicProjection};
             let mut ortho = OrthographicProjection::default_2d();
-            ortho.scale = fit_scale * 1.1;
+            ortho.scale = fit_scale * 0.5;
             commands.entity(off_cam).insert(Projection::Orthographic(ortho));
         }
 
@@ -218,9 +237,6 @@ pub fn setup_graphics(
                 ));
             }
         }
-
-        // Provide desired ortho scale so camera_tuning system applies it next frame
-        commands.insert_resource(crate::camera_tuning::OrthoScale(fit_scale * 1.1));
     }
 }
 
@@ -412,7 +428,6 @@ impl Plugin for SetupPlugin {
         ))
         .add_systems(Startup, setup_meshes)
         .add_systems(Startup, setup_graphics)
-        .add_systems(PostUpdate, crate::camera_tuning::set_ortho_scale_after_spawn)
         .add_systems(Startup, setup_whirl)
         .add_systems(Update, spawn_headless_test_ball)
         // TEMP DEBUG: wiggle the offscreen overlay slightly to prove dynamic rendering in offscreen target

@@ -24,8 +24,6 @@ mod setup;
 mod capture;
 mod ffmpeg;
 mod ball;
-mod camera_tuning;
-mod ball_sync;
 
 use crate::setup::SetupPlugin;
 use crate::ball::BallPlugin;

@@ -807,23 +807,6 @@ fn unstick(
     }
 }
 
-// Heartbeat to confirm Update schedule is running (stderr)
-fn headless_heartbeat(headless: Option<Res<crate::setup::Headless>>, time: Res<Time>) {
-    let is_headless = headless.map(|h| h.0).unwrap_or(false);
-    if !is_headless {
-        return;
-    }
-    static mut ACCUM: f32 = 0.0;
-    let dt = time.delta_secs();
-    unsafe {
-        ACCUM += dt;
-        if ACCUM >= 1.0 {
-            eprintln!("[diag] heartbeat");
-            ACCUM = 0.0;
-        }
-    }
-}
-
 pub struct BallPlugin;
 
 // Diagnostic: spawn a simple, no-physics ball via BallPlugin to test offscreen visibility
@@ -867,7 +850,7 @@ impl Plugin for BallPlugin {
         )))
         .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
         // Periodic debug logging of ball count (every ~2s)
-        .add_systems(Update, (ball_count_logger, headless_heartbeat))
+        .add_systems(Update, (ball_count_logger))
         // Also log BallRender companions
         .add_systems(Update, ball_render_logger)
         // TEMP DEBUG: mirror the first Ball as a bright Sprite to eliminate Mesh2d/material as a factor
