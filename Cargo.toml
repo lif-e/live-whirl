@@ -20,19 +20,10 @@ opt-level = 3
 rand = "0.7.0"
 chrono = "0.4.31"
 coolor = "*"
-bevy = { version = "0.16.1", default-features = false, features = [
-    "bevy_asset",
-    "bevy_core_pipeline",
-    "tonemapping_luts",
-    "bevy_gilrs",
-    "bevy_gltf",
-    "bevy_render",
-    "bevy_sprite",
-    "bevy_text",
-    "bevy_ui",
-    "bevy_winit",
-    "png",
-    "bevy_window"
-] }
+bevy = { version = "0.16.1" }
+crossbeam-channel = "0.5"
+# keep only a single crossbeam-channel entry
 bevy_rapier2d = { version = "0.31.0", features = ["simd-stable", "parallel", "debug-render-2d"] }
+bevy_core_pipeline = "0.16.1"
 # bevy_rapier2d = { version = "0.22.0", features = ["simd-stable", "debug-render-2d"] }
+

@@ -1,202 +1,338 @@
 use bevy::prelude::*;
-use bevy::render::{
-    extract_resource::{ExtractResource, ExtractResourcePlugin},
-    render_asset::RenderAssets,
-    render_resource::{
-        Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Extent3d,
-        MapMode, Origin3d, TextureAspect,
-    },
-    renderer::{RenderDevice, RenderQueue},
-    texture::GpuImage,
-    RenderApp,
-};
-
-use std::sync::{Arc, atomic::AtomicBool};
 use std::sync::mpsc::Sender;
 
-#[derive(Resource, Clone, ExtractResource)]
+#[derive(Resource, Clone)]
 pub struct FrameSender {
     pub tx: Sender<Vec<u8>>,
 }
 
-#[derive(Resource, Clone, ExtractResource)]
-pub struct OffscreenTargetRender {
-    pub handle: Handle<Image>,
-    pub width: u32,
-    pub height: u32,
-}
+// Cross-world channel resources (Render <-> Main)
+use crossbeam_channel as xchan;
+#[derive(Resource, Deref)]
+pub struct MainWorldReceiver(xchan::Receiver<Vec<u8>>);
+#[derive(Resource, Deref)]
+pub struct RenderWorldSender(xchan::Sender<Vec<u8>>);
 
-struct PendingReadback {
+// Handle for the offscreen render image provided by setup
+#[derive(Resource, Clone)]
+pub struct RenderImageHandle(pub Handle<Image>);
+// Capture config mirrored into RenderApp
+#[derive(Resource, Clone)]
+pub struct CaptureConfig { pub width: u32, pub height: u32 }
+
+
+
+// Image copier component (spawned in Main, extracted to Render)
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use bevy::render::{
+    render_asset::RenderAssets,
+    render_graph::{self, RenderGraphContext, NodeRunError, RenderLabel},
+    render_resource::{
+        Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Extent3d, Maintain, MapMode,
+    },
+    renderer::{RenderContext, RenderDevice, RenderQueue},
+    Extract, ExtractSchedule, Render, RenderApp, RenderSet,
+};
+
+#[derive(Clone, Default, Resource, Deref, DerefMut)]
+struct ImageCopiers(pub Vec<ImageCopier>);
+
+#[derive(Clone, Component)]
+pub struct ImageCopier {
     buffer: Buffer,
-    width: u32,
-    height: u32,
-    padded_bytes_per_row: u32,
-    unpadded_bytes_per_row: u32,
-    ready: Arc<AtomicBool>,
-    frame_ndx: u64,
+    enabled: Arc<AtomicBool>,
+    pub src_image: Handle<Image>,
 }
 
-#[derive(Resource, Default)]
-struct ReadbackScratch {
-    pending: Option<PendingReadback>,
-    frame_index: u64,
-    dumps_done: u32,
-}
-
-pub fn add_render_capture_systems(app: &mut App) {
-    // Ensure these resources are extracted into the render world each frame
-    app.add_plugins(ExtractResourcePlugin::<FrameSender>::default());
-    app.add_plugins(ExtractResourcePlugin::<OffscreenTargetRender>::default());
-
-    let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
-        return;
-    };
-
-
-    render_app
-        .init_resource::<ReadbackScratch>()
-        // Capture after the offscreen camera has rendered into the image
-        .add_systems(
-            bevy::render::Render,
-            capture_and_send_frame.in_set(bevy::render::RenderSet::Cleanup),
-        );
-}
-
-fn capture_and_send_frame(
-    images: Res<RenderAssets<GpuImage>>,
-    target: Option<Res<OffscreenTargetRender>>,
-    render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
-    mut scratch: ResMut<ReadbackScratch>,
-    sender: Option<Res<FrameSender>>,
-) {
-    let (target, sender) = match (target, sender) {
-        (Some(t), Some(s)) => (t, s),
-        _ => return,
-    };
-
-    // If a readback is pending, check if it's ready and finish it
-    if let Some(pending) = scratch.pending.take() {
-        if pending.ready.load(std::sync::atomic::Ordering::Acquire) {
-            let slice = pending.buffer.slice(..);
-            let data = slice.get_mapped_range();
-            let mut rgba = Vec::with_capacity((pending.width * pending.height * 4) as usize);
-            for row in 0..pending.height {
-                let start = (row * pending.padded_bytes_per_row) as usize;
-                let end = start + pending.unpadded_bytes_per_row as usize;
-                rgba.extend_from_slice(&data[start..end]);
-            }
-            drop(data);
-            pending.buffer.unmap();
-
-            // Write periodic dumps: 600, 1200, 1800, 2400 (at most 4)
-            match pending.frame_ndx {
-                600 | 1200 | 1800 | 2400 => {
-                    let path = format!("frame_{:04}.rgba", pending.frame_ndx);
-                    if std::fs::write(&path, &rgba).is_ok() {
-                        eprintln!("[diag] wrote {} ({} bytes)", path, rgba.len());
-                    }
-                }
-                0 => {
-                    // One-shot first frame dump
-                    let _ = std::fs::write("first_frame.rgba", &rgba);
-                    eprintln!("[diag] wrote first_frame.rgba ({} bytes)", rgba.len());
-                }
-                _ => {}
-            }
-
-            // Lightweight content checksum to help detect duplicate frames
-            // Full-frame checksum to detect frame-to-frame changes
-            let checksum: u64 = rgba.chunks_exact(8)
-                .map(|b| u64::from_le_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]]))
-                .fold(0u64, |acc, v| acc.wrapping_mul(1315423911).wrapping_add(v));
-            eprintln!("[diag] frame {} checksum {:016x}", pending.frame_ndx, checksum);
-
-            // Also log the first and last 16 bytes for quick eyeballing of changes
-            if pending.frame_ndx % 120 == 0 {
-                if rgba.len() >= 32 {
-                    eprintln!("[diag] frame {} head {:02x?} tail {:02x?}", pending.frame_ndx, &rgba[..16], &rgba[rgba.len()-16..]);
-                }
-            }
-
-            let _ = sender.tx.send(rgba);
-        } else {
-            // Not ready yet; put it back and try again next frame
-            scratch.pending = Some(pending);
-            return;
-        }
+impl ImageCopier {
+    pub fn new(src_image: Handle<Image>, size: Extent3d, render_device: &RenderDevice) -> Self {
+        let bytes_per_pixel = 4usize; // Rgba8UnormSrgb
+        let row_bytes = (size.width as usize) * bytes_per_pixel;
+        let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(row_bytes);
+        let cpu_buffer = render_device.create_buffer(&BufferDescriptor {
+            label: Some("copy-staging"),
+            size: (padded_bytes_per_row as u64) * (size.height as u64),
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer: cpu_buffer, src_image, enabled: Arc::new(AtomicBool::new(true)) }
     }
+    pub fn enabled(&self) -> bool { self.enabled.load(Ordering::Relaxed) }
+}
 
-    // Start a new readback for the current frame
-    let gpu_image: &GpuImage = match images.get(&target.handle) {
-        Some(img) => img,
-        None => return,
-    };
+fn image_copy_extract(mut commands: bevy::prelude::Commands, copiers: Extract<Query<&ImageCopier>>) {
+    commands.insert_resource(ImageCopiers(copiers.iter().cloned().collect()));
+}
 
-    scratch.frame_index = scratch.frame_index.wrapping_add(1);
+#[derive(Debug, PartialEq, Eq, Clone, Hash, RenderLabel)]
+struct ImageCopy;
 
-    let width = target.width;
-    let height = target.height;
-    let bytes_per_pixel = 4u32; // RGBA8
-    let align = 256u32; // COPY_BYTES_PER_ROW_ALIGNMENT
-    let unpadded_bytes_per_row = width * bytes_per_pixel;
-    let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
-    let buffer_size = (padded_bytes_per_row * height) as u64;
+#[derive(Default)]
+struct ImageCopyDriver;
 
-    let buffer = render_device.create_buffer(&BufferDescriptor {
-        label: Some("frame_readback_buffer"),
-        size: buffer_size,
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+impl render_graph::Node for ImageCopyDriver {
+    fn run(
+        &self,
+        _graph: &mut RenderGraphContext,
+        render_context: &mut RenderContext,
+        world: &World,
+    ) -> Result<(), NodeRunError> {
+        let image_copiers = world.resource::<ImageCopiers>();
+        let gpu_images = world.resource::<RenderAssets<bevy::render::texture::GpuImage>>();
 
-    let mut encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("frame_readback_encoder"),
-    });
+        for copier in image_copiers.iter() {
+            if !copier.enabled() { continue; }
+            let src_image = match gpu_images.get(&copier.src_image) { Some(i) => i, None => continue };
 
-    use std::num::NonZeroU32;
+            let mut encoder = render_context
+                .render_device()
+                .create_command_encoder(&CommandEncoderDescriptor::default());
+
+            // Align row size for copy
+            let block_dims = src_image.texture_format.block_dimensions();
+            let block_size = src_image.texture_format.block_copy_size(None).unwrap();
+            let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(
+                (src_image.size.width as usize / block_dims.0 as usize) * block_size as usize,
+            );
+
+            encoder.copy_texture_to_buffer(
+                src_image.texture.as_image_copy(),
+                bevy::render::render_resource::TexelCopyBufferInfo {
+                    buffer: &copier.buffer,
+                    layout: bevy::render::render_resource::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(std::num::NonZeroU32::new(padded_bytes_per_row as u32).unwrap().into()),
+                        rows_per_image: None,
+                    },
+                },
+                src_image.size,
+            );
+
+            let render_queue = world.resource::<RenderQueue>();
+            render_queue.submit(std::iter::once(encoder.finish()));
+        }
+        Ok(())
+    }
+}
+
+// Simple GPU staging buffer state in the render world
+#[derive(Resource)]
+pub struct GpuCopyState { pub buffer: bevy::render::render_resource::Buffer, pub padded_bpr: usize, pub height: u32 }
+
+// Extract the offscreen image handle from main into the RenderApp
+pub fn extract_render_image_handle(
+    mut commands: bevy::prelude::Commands,
+    handle: Extract<Option<Res<RenderImageHandle>>>,
+) {
+    if let Some(h) = handle.as_deref() { commands.insert_resource(h.clone()); }
+}
+
+// Ensure the staging buffer exists and matches the requested size
+pub fn ensure_gpu_copy_state(
+    mut commands: bevy::prelude::Commands,
+    device: Res<RenderDevice>,
+    cfg: Option<Res<CaptureConfig>>,
+    state: Option<Res<GpuCopyState>>,
+) {
+    let Some(cfg) = cfg else { return; };
+    let row_bytes = (cfg.width as usize) * 4; // RGBA8
+    let padded_bpr = RenderDevice::align_copy_bytes_per_row(row_bytes);
+    let needed_size = (padded_bpr as u64) * (cfg.height as u64);
+    let mut need_new = true;
+    if let Some(s) = state.as_ref() {
+        if s.padded_bpr == padded_bpr && s.height == cfg.height { need_new = false; }
+    }
+    if need_new {
+        let buffer = device.create_buffer(&bevy::render::render_resource::BufferDescriptor {
+            label: Some("frame-staging"),
+            size: needed_size,
+            usage: bevy::render::render_resource::BufferUsages::MAP_READ | bevy::render::render_resource::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        commands.insert_resource(GpuCopyState { buffer, padded_bpr, height: cfg.height });
+    }
+}
+
+// Copy the render target texture to CPU-visible buffer and send via crossbeam
+pub fn copy_and_send_frame(
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+    handle: Option<Res<RenderImageHandle>>,
+    gpu_images: Res<bevy::render::render_asset::RenderAssets<bevy::render::texture::GpuImage>>,
+    state: Option<Res<GpuCopyState>>,
+    sender: Option<Res<RenderWorldSender>>,
+) {
+    let (Some(h), Some(state), Some(sender)) = (handle, state, sender) else { return; };
+    let Some(src) = gpu_images.get(&h.0) else { return; };
+
+    let mut encoder = device.create_command_encoder(&bevy::render::render_resource::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
-        bevy::render::render_resource::TexelCopyTextureInfo {
-            texture: &gpu_image.texture,
-            mip_level: 0,
-            origin: Origin3d::ZERO,
-            aspect: TextureAspect::All,
-        },
+        src.texture.as_image_copy(),
         bevy::render::render_resource::TexelCopyBufferInfo {
-            buffer: &buffer,
+            buffer: &state.buffer,
             layout: bevy::render::render_resource::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(NonZeroU32::new(padded_bytes_per_row).unwrap().into()),
-                rows_per_image: Some(NonZeroU32::new(height).unwrap().into()),
+                bytes_per_row: Some(std::num::NonZeroU32::new(state.padded_bpr as u32).unwrap().into()),
+                rows_per_image: None,
             },
         },
-        Extent3d { width, height, depth_or_array_layers: 1 },
+        src.size,
     );
+    queue.submit(std::iter::once(encoder.finish()));
 
-    render_queue.submit(std::iter::once(encoder.finish()));
-
-    let slice = buffer.slice(..);
-    let ready = Arc::new(AtomicBool::new(false));
-    let ready_cb = ready.clone();
-    let frame_ndx = scratch.frame_index;
-    slice.map_async(MapMode::Read, move |res| {
-        if res.is_ok() {
-            ready_cb.store(true, std::sync::atomic::Ordering::Release);
-        }
-        eprintln!("[diag] capture map_async for frame {} => {:?}", frame_ndx, res);
-    });
-
-    // Store pending readback; Bevy will drive GPU progress between frames
-    scratch.pending = Some(PendingReadback {
-        buffer,
-        width,
-        height,
-        padded_bytes_per_row,
-        unpadded_bytes_per_row,
-        ready,
-        frame_ndx,
-    });
+    let slice = state.buffer.slice(..);
+    let (s, r) = xchan::bounded(1);
+    slice.map_async(bevy::render::render_resource::MapMode::Read, move |res| { let _ = s.send(res); });
+    device.poll(bevy::render::render_resource::Maintain::wait()).panic_on_timeout();
+    if r.recv().is_ok() {
+        let bytes = slice.get_mapped_range().to_vec();
+        let _ = sender.send(bytes);
+        state.buffer.unmap();
+    }
 }
 
-// (disabled) Option A diagnostic pass was here; removed to avoid altering the image.
 
+fn receive_image_from_buffer(
+    image_copiers: Res<ImageCopiers>,
+    render_device: Res<RenderDevice>,
+    sender: Res<RenderWorldSender>,
+) {
+    for copier in image_copiers.iter() {
+        if !copier.enabled() { continue; }
+        let slice = copier.buffer.slice(..);
+        let (s, r) = xchan::bounded(1);
+
+
+
+// Mirror main-world handle into render-world so we can find the GPU image
+pub fn extract_render_image_handle(mut commands: bevy::prelude::Commands, handle: Option<Res<RenderImageHandle>>) {
+    if let Some(h) = handle { commands.insert_resource(h.clone()); }
+}
+
+// Simple GPU staging buffer state in the render world
+#[derive(Resource)]
+struct GpuCopyState { buffer: bevy::render::render_resource::Buffer, padded_bpr: usize, height: u32 }
+
+pub fn ensure_gpu_copy_state(
+    mut commands: bevy::prelude::Commands,
+    device: Res<RenderDevice>,
+    cfg: Option<Res<CaptureConfig>>,
+    state: Option<Res<GpuCopyState>>,
+) {
+    let Some(cfg) = cfg else { return; };
+    let row_bytes = (cfg.width as usize) * 4; // RGBA8
+    let padded_bpr = RenderDevice::align_copy_bytes_per_row(row_bytes);
+    let needed_size = (padded_bpr as u64) * (cfg.height as u64);
+    let mut need_new = true;
+    if let Some(s) = state.as_ref() {
+        if s.padded_bpr == padded_bpr && s.height == cfg.height { need_new = false; }
+    }
+    if need_new {
+        let buffer = device.create_buffer(&bevy::render::render_resource::BufferDescriptor {
+            label: Some("frame-staging"),
+            size: needed_size,
+            usage: bevy::render::render_resource::BufferUsages::MAP_READ | bevy::render::render_resource::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        commands.insert_resource(GpuCopyState { buffer, padded_bpr, height: cfg.height });
+    }
+}
+
+pub fn copy_and_send_frame(
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+    handle: Option<Res<RenderImageHandle>>,
+    gpu_images: Res<bevy::render::render_asset::RenderAssets<bevy::render::texture::GpuImage>>,
+    state: Option<Res<GpuCopyState>>,
+    sender: Option<Res<RenderWorldSender>>,
+) {
+    let (Some(h), Some(state), Some(sender)) = (handle, state, sender) else { return; };
+    let Some(src) = gpu_images.get(&h.0) else { return; };
+
+    let mut encoder = device.create_command_encoder(&bevy::render::render_resource::CommandEncoderDescriptor::default());
+
+    encoder.copy_texture_to_buffer(
+        src.texture.as_image_copy(),
+        bevy::render::render_resource::TexelCopyBufferInfo {
+            buffer: &state.buffer,
+            layout: bevy::render::render_resource::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(std::num::NonZeroU32::new(state.padded_bpr as u32).unwrap().into()),
+                rows_per_image: None,
+            },
+        },
+        src.size,
+    );
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = state.buffer.slice(..);
+    let (s, r) = xchan::bounded(1);
+    slice.map_async(bevy::render::render_resource::MapMode::Read, move |res| { let _ = s.send(res); });
+    device.poll(bevy::render::render_resource::Maintain::wait()).panic_on_timeout();
+    if r.recv().is_ok() {
+        let bytes = slice.get_mapped_range().to_vec();
+        let _ = sender.send(bytes);
+        state.buffer.unmap();
+    }
+}
+
+        slice.map_async(MapMode::Read, move |res| { let _ = s.send(res); });
+        render_device.poll(Maintain::wait()).panic_on_timeout();
+        if r.recv().is_ok() {
+            let bytes = slice.get_mapped_range().to_vec();
+            let _ = sender.send(bytes);
+            copier.buffer.unmap();
+        }
+    }
+}
+
+fn forward_frames_to_ffmpeg(
+    receiver: Option<Res<MainWorldReceiver>>,
+    sender: Option<Res<FrameSender>>,
+    cfg: Option<Res<crate::setup::VideoExportRequest>>,
+) {
+    let (Some(rx), Some(sender), Some(cfg)) = (receiver, sender, cfg) else { return; };
+    let row_bytes = (cfg.width as usize) * 4;
+    let aligned = RenderDevice::align_copy_bytes_per_row(row_bytes);
+    let tx = &sender.tx;
+    // Drain all available frames and forward the last one
+    let mut last: Option<Vec<u8>> = None;
+    while let Ok(bytes) = rx.try_recv() { last = Some(bytes); }
+    if let Some(img) = last {
+        if aligned == row_bytes {
+            let _ = tx.send(img);
+        } else {
+            // shrink rows
+            let mut out = Vec::with_capacity(row_bytes * (cfg.height as usize));
+            for row in img.chunks(aligned).take(cfg.height as usize) {
+                out.extend_from_slice(&row[..row_bytes.min(row.len())]);
+            }
+            let _ = tx.send(out);
+        }
+    }
+}
+
+
+pub fn add_render_capture_systems(app: &mut App) {
+    // Setup cross-world channel for image bytes
+    let (s, r) = xchan::unbounded();
+    app.insert_resource(MainWorldReceiver(r));
+
+    // Mirror capture config into RenderApp if present
+    if let Some(req) = app.world_mut().get_resource::<crate::setup::VideoExportRequest>().cloned() {
+        app.sub_app_mut(RenderApp).insert_resource(CaptureConfig { width: req.width, height: req.height });
+    }
+
+    // RenderApp systems: extract handle, ensure staging buffer, copy+send
+    app.sub_app_mut(RenderApp)
+        .insert_resource(RenderWorldSender(s))
+        .add_systems(ExtractSchedule, extract_render_image_handle)
+        .add_systems(Render, (
+            ensure_gpu_copy_state,
+            copy_and_send_frame.after(RenderSet::Render),
+        ));
+
+    // Main world: forward from crossbeam receiver to ffmpeg channel
+    app.add_systems(bevy::app::PostUpdate, forward_frames_to_ffmpeg);
+}

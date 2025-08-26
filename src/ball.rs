@@ -8,7 +8,7 @@ use bevy::{
         Entity, EventReader, GlobalTransform, Local, Plugin, Query, Res, ResMut, Resource, Time, Timer, TimerMode,
         Transform, Update, Vec2, With,
     },
-    render::{prelude::Mesh2d, view::RenderLayers},
+    render::{prelude::Mesh2d},
     sprite::{ColorMaterial, MeshMaterial2d},
 };
 use bevy_rapier2d::prelude::{
@@ -418,22 +418,14 @@ fn reproduce_balls(
                 ActiveEvents::CONTACT_FORCE_EVENTS,
                 // Ccd::enabled(),
                 Restitution::new(0.1),
-                // Ensure parent participates in visibility hierarchy
-                bevy::render::view::Visibility::Visible,
-                bevy::render::view::InheritedVisibility::VISIBLE,
                 Transform::from_xyz(new_ball_x, new_ball_y, 0.0),
                 GlobalTransform::default(),
-                RenderLayers::layer(1),
             ))
             .id();
         let child = commands
             .spawn((
                 bevy::sprite::Sprite::from_color(Color::hsl(0.0, 1.0, 0.6), Vec2::new(36.0, 36.0)),
-                bevy::render::view::Visibility::Visible,
-                bevy::prelude::InheritedVisibility::VISIBLE,
-                Transform::from_xyz(0.0, 0.0, 30.0),
-                bevy::render::view::NoFrustumCulling,
-                RenderLayers::from_layers(&[0, 1]),
+                Transform::from_xyz(0.0, 0.0, 0.0),
                 BallRender { parent },
             ))
             .id();
@@ -543,11 +535,8 @@ fn add_balls(
             ActiveEvents::CONTACT_FORCE_EVENTS,
             Restitution::new(0.1),
             // Ensure visibility hierarchy is established for the render child
-            bevy::render::view::Visibility::Visible,
-            bevy::render::view::InheritedVisibility::VISIBLE,
             Transform::from_xyz(x, y, 0.0),
             GlobalTransform::default(),
-            RenderLayers::layer(1),
         ))
         .id();
     // Use a smaller bright sprite to reduce occlusion risk
@@ -555,11 +544,7 @@ fn add_balls(
         .spawn((
             Mesh2d(mesh_assets.ball_circle.clone()),
             MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(300.0, 1.0, 0.5)))),
-            bevy::render::view::Visibility::Visible,
-            bevy::prelude::InheritedVisibility::VISIBLE,
-            Transform::from_xyz(0.0, 0.0, 50.0),
-            bevy::render::view::NoFrustumCulling,
-            RenderLayers::from_layers(&[0, 1]),
+            Transform::from_xyz(0.0, 0.0, 0.0),
             BallRender { parent: _parent },
         ))
         .id();
@@ -569,11 +554,7 @@ fn add_balls(
     let marker = commands
         .spawn((
             bevy::sprite::Sprite::from_color(Color::hsl(60.0, 1.0, 0.6), Vec2::new(30.0, 30.0)),
-            bevy::render::view::Visibility::Visible,
-            bevy::render::view::InheritedVisibility::VISIBLE,
-            Transform::from_xyz(0.0, 0.0, 30.0),
-            bevy::render::view::NoFrustumCulling,
-            RenderLayers::layer(1),
+            Transform::from_xyz(0.0, 0.0, 0.0),
         ))
         .id();
     commands.entity(_parent).add_child(marker);
@@ -812,17 +793,12 @@ pub struct BallPlugin;
 // Diagnostic: spawn a simple, no-physics ball via BallPlugin to test offscreen visibility
 fn spawn_debug_simple_ball(
     mut commands: Commands,
-    headless: Option<Res<crate::setup::Headless>>,
-    video_req: Option<Res<crate::setup::VideoExportRequest>>,
     mut spawned: Local<bool>,
     mesh_assets: Option<Res<crate::setup::MeshAssets2d>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if *spawned { return; }
-    let is_headless = headless.map(|h| h.0).unwrap_or(false);
-    let has_video = video_req.is_some();
     let Some(mesh_assets) = mesh_assets else { return; };
-    if !(is_headless && has_video) { return; }
 
     let x = -200.0;
     let y = 1800.0;
@@ -830,10 +806,7 @@ fn spawn_debug_simple_ball(
     commands.spawn((
         Mesh2d(mesh_assets.ball_circle.clone()),
         MeshMaterial2d(material),
-        bevy::render::view::Visibility::Visible,
-        bevy::render::view::InheritedVisibility::VISIBLE,
-        Transform::from_xyz(x, y, 2.0),
-        RenderLayers::layer(1),
+        Transform::from_xyz(x, y, 0.0),
     ));
     eprintln!("[diag] spawned debug simple ball at ({:.1},{:.1})", x, y);
     *spawned = true;
@@ -850,11 +823,9 @@ impl Plugin for BallPlugin {
         )))
         .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
         // Periodic debug logging of ball count (every ~2s)
-        .add_systems(Update, (ball_count_logger))
+        .add_systems(Update, ball_count_logger)
         // Also log BallRender companions
         .add_systems(Update, ball_render_logger)
-        // TEMP DEBUG: mirror the first Ball as a bright Sprite to eliminate Mesh2d/material as a factor
-        .add_systems(Update, update_ball_debug_mirror)
         // Ensure spawn -> transforms/visibility -> extract ordering
         // Move to Update so the render extract sees them earlier this frame
         .add_systems(Update, (add_balls, reproduce_balls))
@@ -866,52 +837,14 @@ impl Plugin for BallPlugin {
     }
 }
 
-#[derive(Component)]
-struct BallDebugMirror;
-
-// Spawns a single bright Sprite that tracks the first Ball's position.
-// This bypasses Mesh2d/Material2d, parenting, and z-order complexities.
-fn update_ball_debug_mirror(
-    mut commands: Commands,
-    mut marker: Local<Option<Entity>>,
-    q_balls: Query<&GlobalTransform, With<Ball>>,
-    mut q_marker_tf: Query<&mut Transform, With<BallDebugMirror>>,
-) {
-    // Track the first ball if any
-    let first_ball = q_balls.iter().next().copied();
-    match (*marker, first_ball) {
-        (None, Some(gt)) => {
-            let pos = gt.translation();
-            let e = commands
-                .spawn((
-                    bevy::sprite::Sprite::from_color(Color::hsl(60.0, 1.0, 0.6), Vec2::new(60.0, 60.0)),
-                    bevy::render::view::Visibility::Visible,
-                    bevy::render::view::visibility::InheritedVisibility::VISIBLE,
-                    // Put well above pegs/walls
-                    Transform::from_xyz(pos.x, pos.y, 40.0),
-                    bevy::render::view::NoFrustumCulling,
-                    RenderLayers::layer(1),
-                    BallDebugMirror,
-                ))
-                .id();
-            *marker = Some(e);
-        }
-        (Some(e), Some(gt)) => {
-            if let Ok(mut tf) = q_marker_tf.get_mut(e) {
-                let p = gt.translation();
-
-                tf.translation.x = p.x;
-                tf.translation.y = p.y;
-                tf.translation.z = 40.0;
-            }
-        }
-        // No balls yet: do nothing
-        _ => {}
-    }
-}
-
 fn ball_render_logger(
-    q: Query<(Entity, &GlobalTransform, Option<&bevy::render::view::visibility::ViewVisibility>, Option<&bevy::render::view::visibility::InheritedVisibility>), With<BallRender>>,
+    q: Query<
+        (
+            Entity,
+            &GlobalTransform,
+        ),
+        With<BallRender>
+    >,
     time: Res<Time>,
 ) {
     static mut ACC: f32 = 0.0;
@@ -921,11 +854,9 @@ fn ball_render_logger(
         if ACC >= 1.0 {
             let count = q.iter().count();
             let mut it = q.iter();
-            let sample = it.next().map(|(_e, g, vv, iv)| {
+            let sample = it.next().map(|(_e, g)| {
                 let t = g.translation();
-                let vv = vv.map(|v| v.get()).unwrap_or(false);
-                let iv = iv.map(|v| v.get()).unwrap_or(true);
-                ((t.x, t.y, t.z), vv, iv)
+                ((t.x, t.y, t.z),)
             });
             eprintln!("[diag] ball_render: count={count} sample={sample:?}");
             ACC = 0.0;

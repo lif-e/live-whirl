@@ -24,21 +24,21 @@ run-windowed:
 	cargo run
 
 run-headless-video:
-	HEADLESS=1 VIDEO_EXPORT=1 cargo run
+	VIDEO_EXPORT=1 cargo run
 
 run-headless-video-quiet:
 	@echo "Running headless+video; showing only [diag] lines"
-	@HEADLESS=1 VIDEO_EXPORT=1 cargo run 2>&1 | grep -E "\[diag\]|\[ffmpeg\]" || true
+	@VIDEO_EXPORT=1 cargo run 2>&1 | grep -E "\[diag\]|\[ffmpeg\]" || true
 
 # Diagnostics-only variant (stderr to file)
 run-headless-video-log:
 	@echo "Running headless+video; full logs -> run.log; showing [diag]/[ffmpeg] live"
-	@HEADLESS=1 VIDEO_EXPORT=1 cargo run 2>&1 | tee run.log | grep -E "\[diag\]|\[ffmpeg\]" || true
+	@VIDEO_EXPORT=1 cargo run 2>&1 | tee run.log | grep -E "\[diag\]|\[ffmpeg\]" || true
 
 # Build + run in one step using shell operators per request
 run-headless-video-build:
 	@echo "Build + run headless+video with diagnostics"
-	@cargo build && (HEADLESS=1 VIDEO_EXPORT=1 cargo run 2>&1 | tee run.log | grep -E "\[diag\]|\[ffmpeg\]" || true)
+	@cargo build && (VIDEO_EXPORT=1 cargo run 2>&1 | tee run.log | grep -E "\[diag\]|\[ffmpeg\]" || true)
 
 test:
 	cargo test

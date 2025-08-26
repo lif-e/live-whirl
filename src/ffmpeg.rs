@@ -14,7 +14,7 @@ pub fn spawn_ffmpeg(
     rx: Receiver<Vec<u8>>,
 ) -> std::io::Result<FfmpegHandle> {
     let filename = format!(
-        "output_{}_{}.mp4",
+        "./output/video/{}_{}.mp4",
         fps,
         chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S")
     );

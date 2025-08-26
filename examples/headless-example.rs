@@ -1,9 +1,3 @@
-headless_renderer/
-headless_renderer.rs
-Settings
-Help
-
-Summary
 //! This example illustrates how to make headless renderer
 //! derived from: <https://sotrh.github.io/learn-wgpu/showcase/windowless/#a-triangle-without-a-window>
 //! It follows this steps:
@@ -88,12 +82,8 @@ fn main() {
         .add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
-                // Not strictly necessary, as the inclusion of ScheduleRunnerPlugin below
-                // replaces the bevy_winit app runner and so a window is never created.
-                .set(WindowPlugin {
-                    primary_window: None,
-                    ..default()
-                })
+                // Keep WindowPlugin but with no primary window; suppress auto-exit separately
+                .set(WindowPlugin { primary_window: None, ..default() })
                 // WinitPlugin will panic in environments without a display server.
                 .disable::<WinitPlugin>(),
         )
@@ -106,9 +96,30 @@ fn main() {
             // Run 60 times per second.
             Duration::from_secs_f64(1.0 / 60.0),
         ))
+        .add_systems(Last, suppress_window_auto_exit)
         .init_resource::<SceneController>()
         .add_systems(Startup, setup)
+        .add_systems(Update, animate_material_color)
         .run();
+}
+
+fn animate_material_color(
+    time: Res<Time>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    q: Query<&MeshMaterial3d<StandardMaterial>>,
+) {
+    let t = time.elapsed_secs();
+    let hue = (t * 60.0) % 360.0;
+    let color = Color::hsl(hue, 0.9, 0.5);
+    for MeshMaterial3d(handle) in &q {
+        if let Some(mat) = materials.get_mut(handle) {
+            mat.base_color = color;
+        }
+    }
+}
+
+fn suppress_window_auto_exit(mut ev: ResMut<Events<AppExit>>) {
+    ev.clear();
 }
 
 /// Capture image settings and state
