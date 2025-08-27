@@ -11,9 +11,10 @@ use bevy::{
     render::{prelude::Mesh2d},
     sprite::{ColorMaterial, MeshMaterial2d},
 };
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy_rapier2d::prelude::{
     ActiveEvents, Collider, ColliderMassProperties, ContactForceEvent, Friction,
-    ImpulseJoint as BevyImpulseJoint, QueryFilter, RapierContext, RapierImpulseJointHandle,
+    ImpulseJoint as BevyImpulseJoint, PhysicsSet, QueryFilter, RapierContext, RapierImpulseJointHandle,
     Restitution, RevoluteJointBuilder, RigidBody, Velocity,
 };
 
@@ -762,12 +763,12 @@ impl Plugin for BallPlugin {
         .add_systems(Update, ball_count_logger)
         // Also log BallRender companions
         .add_systems(Update, ball_render_logger)
-        // Ensure spawn -> transforms/visibility -> extract ordering
-        // Move to Update so the render extract sees them earlier this frame
-        .add_systems(Update, (add_balls, reproduce_balls))
-        .add_systems(Update, contacts)
-        .add_systems(Update, unstick)
-        .add_systems(Update, update_life_points);
+          // Ensure spawn -> transforms/visibility -> extract ordering
+          // Move to Update so the render extract sees them earlier this frame
+          .add_systems(Update, (add_balls, reproduce_balls))
+          .add_systems(Update, contacts.in_set(PhysicsSet::Writeback))
+          .add_systems(Update, unstick.in_set(PhysicsSet::Writeback))
+          .add_systems(Update, update_life_points);
 
     }
 }
