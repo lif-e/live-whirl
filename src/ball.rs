@@ -766,6 +766,7 @@ impl Plugin for BallPlugin {
           // Ensure spawn -> transforms/visibility -> extract ordering
           // Move to Update so the render extract sees them earlier this frame
           .add_systems(Update, (add_balls, reproduce_balls))
+          // Run contact handling after the physics step
           .add_systems(Update, contacts.in_set(PhysicsSet::Writeback))
           .add_systems(Update, unstick.in_set(PhysicsSet::Writeback))
           .add_systems(Update, update_life_points);
