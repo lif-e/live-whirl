@@ -1,4 +1,7 @@
+use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Receiver;
 use std::thread;
@@ -13,15 +16,24 @@ pub fn spawn_ffmpeg(
     fps: u32,
     rx: Receiver<Vec<u8>>,
 ) -> std::io::Result<FfmpegHandle> {
+    // Ensure output directory exists
+    let out_dir = Path::new("./output/video");
+    if let Err(e) = fs::create_dir_all(out_dir) {
+        eprintln!("[warn] could not create {:?}: {e}", out_dir);
+    }
+
     let filename = format!(
         "./output/video/{}_{}.mp4",
         fps,
         chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S")
     );
     // Write to MP4 (faststart) and a UDP MPEG-TS preview simultaneously via tee
+    // UDP host/port configurable via env UDP_HOST and UDP_PORT; defaults 127.0.0.1:12345
+    let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let udp_port = env::var("UDP_PORT").unwrap_or_else(|_| "12345".to_string());
     // Avoid empty_moov to improve compatibility; let ffmpeg finalize moov at exit
     let tee_outputs = format!(
-        "[f=mp4:movflags=+faststart]{filename}|[f=mpegts]udp://127.0.0.1:12345?pkt_size=1316",
+        "[f=mp4:movflags=+faststart]{filename}|[f=mpegts]udp://{udp_host}:{udp_port}?pkt_size=1316",
     );
 
     let mut child = Command::new("ffmpeg")
