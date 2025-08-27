@@ -52,3 +52,14 @@ clippy:
 clean:
 	cargo clean
 
+
+
+# Preview UDP stream alongside recording (uses ffplay)
+.PHONY: preview-udp
+preview-udp:
+	ffplay \
+	  -fflags nobuffer -flags low_delay -fflags discardcorrupt \
+	  -sync ext -framedrop \
+	  -probesize 32 -analyzeduration 0 \
+	  'udp://127.0.0.1:12345?overrun_nonfatal=1&fifo_size=5000000' \
+	  -vf fps=60

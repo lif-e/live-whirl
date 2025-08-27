@@ -124,12 +124,12 @@ pub fn setup_graphics(
         let (rt, img_handle) = setup_render_target(&mut images, export.width, export.height);
         render_target_opt = Some(rt);
         // Provide the render image handle so the capture pipeline can find the GPU image
-        commands.insert_resource(crate::capture::RenderImageHandle(img_handle.clone()));
+        commands.insert_resource(crate::capture::RenderImageHandle(img_handle));
         // Mirror VideoExportRequest into CaptureConfig for render app
         commands.insert_resource(crate::capture::CaptureConfig { width: export.width, height: export.height });
     }
     if let Ok(mut rc) = rapier_config_q.single_mut() {
-        rc.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000625 * 100.0);
+        rc.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000_625 * 100.0);
     }
     *timestep_mode = TimestepMode::Fixed {
         dt: 1.0 / 60.0,
@@ -143,9 +143,9 @@ pub fn setup_graphics(
     let center_y = 0.5 * (WALL_BOX.min_y + WALL_BOX.max_y);
 
     // Offscreen camera centered on playfield, with orthographic scale set to fit entire area
+    // imports kept near usage for clarity in this function
     use bevy::math::UVec2;
-    use bevy::render::camera::Viewport;
-    use bevy::render::camera::ClearColorConfig;
+    use bevy::render::camera::{Viewport, ClearColorConfig};
     let mut cam = Camera { hdr: false, order: 1, ..Default::default() };
     if let Some(rt) = render_target_opt {
         cam.target = rt;
@@ -163,7 +163,7 @@ pub fn setup_graphics(
     commands.entity(camera_2d).insert(Projection::Orthographic(ortho));
 }
 
-pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER * 1.62068966;
+pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER * 1.620_689_6;
 pub const GROUND_WIDTH: f32 = 8.0 * PIXELS_PER_METER;
 pub const WALL_THICKNESS: f32 = 0.1 * PIXELS_PER_METER;
 
@@ -213,7 +213,7 @@ pub fn setup_whirl(
     let rng = &mut rng_resource.rng;
     let mut add_wall = |size: Vec2, position: Vec2| {
         commands.spawn((
-            Wall::default(),
+            Wall,
             Collider::cuboid(size.x / 2.0, size.y / 2.0),
             Mesh2d(meshes.add(bevy::math::primitives::Rectangle::from_size(size))),
             MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0)))),
@@ -254,7 +254,7 @@ pub fn setup_whirl(
             let size = Vec2::new(BALL_RADIUS, BALL_RADIUS);
             let position = Vec2::new(x + row_shift, y);
             commands.spawn((
-                Peg::default(),
+                Peg,
                 Collider::cuboid(size.x / 2.0, size.y / 2.0),
                 Mesh2d(meshes.add(bevy::math::primitives::Rectangle::from_size(size))),
                 MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0)))),
@@ -269,7 +269,7 @@ pub fn setup_whirl(
                     y - (VERTICAL_SPACING / 3.0),
                 );
                 commands.spawn((
-                    Peg::default(),
+                    Peg,
                     Collider::cuboid(size.x / 2.0, size.y / 2.0),
                     Mesh2d(meshes.add(bevy::math::primitives::Rectangle::from_size(size))),
                     MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(0.0, 0.0, 1.0)))),

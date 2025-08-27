@@ -2734,6 +2734,7 @@ dependencies = [
  "chrono",
  "coolor",
  "crossbeam-channel",
+ "ctrlc",
  "rand 0.7.3",
 ]
 

@@ -25,5 +25,6 @@ crossbeam-channel = "0.5"
 # keep only a single crossbeam-channel entry
 bevy_rapier2d = { version = "0.31.0", features = ["simd-stable", "parallel", "debug-render-2d"] }
 bevy_core_pipeline = "0.16.1"
+ctrlc = "3.4.7"
 # bevy_rapier2d = { version = "0.22.0", features = ["simd-stable", "debug-render-2d"] }
 

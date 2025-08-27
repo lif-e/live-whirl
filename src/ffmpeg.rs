@@ -21,18 +21,17 @@ pub fn spawn_ffmpeg(
     // Write to MP4 (faststart) and a UDP MPEG-TS preview simultaneously via tee
     // Avoid empty_moov to improve compatibility; let ffmpeg finalize moov at exit
     let tee_outputs = format!(
-        "[f=mp4:movflags=+faststart]{}|[f=mpegts]udp://127.0.0.1:12345?pkt_size=1316",
-        filename
+        "[f=mp4:movflags=+faststart]{filename}|[f=mpegts]udp://127.0.0.1:12345?pkt_size=1316",
     );
 
     let mut child = Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-y",
             // raw RGBA frames on stdin
             "-f", "rawvideo",
             "-pix_fmt", "rgba",
-            "-video_size", &format!("{}x{}", width, height),
-            "-framerate", &format!("{}", fps),
+            "-video_size", &format!("{width}x{height}"),
+            "-framerate", &format!("{fps}"),
             "-i", "-",
             // convert to RGB24 for x264 and then encode YUV420p
             "-vf", "format=rgb24",
@@ -56,8 +55,8 @@ pub fn spawn_ffmpeg(
     // Forward ffmpeg stderr with a prefix so errors are visible
     if let Some(stderr) = child.stderr.take() {
         thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().flatten() {
-                eprintln!("[ffmpeg] {}", line);
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                eprintln!("[ffmpeg] {line}");
             }
         });
     }
@@ -72,7 +71,7 @@ pub fn spawn_ffmpeg(
                 continue;
             }
             if let Err(e) = stdin.write_all(&frame) {
-                eprintln!("[ffmpeg] stdin write error: {}", e);
+                eprintln!("[ffmpeg] stdin write error: {e}");
                 break;
             }
         }

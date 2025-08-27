@@ -5,7 +5,7 @@ use bevy::{
     color::Hsla,
     prelude::{
         App, Assets, Children, Color, Commands, Component,
-        Entity, EventReader, GlobalTransform, Local, Plugin, Query, Res, ResMut, Resource, Time, Timer, TimerMode,
+        Entity, EventReader, GlobalTransform, Plugin, Query, Res, ResMut, Resource, Time, Timer, TimerMode,
         Transform, Update, Vec2, With,
     },
     render::{prelude::Mesh2d},
@@ -23,7 +23,7 @@ use crate::{
 };
 
 pub const BALL_RADIUS: f32 = 0.05 * PIXELS_PER_METER;
-const MAX_LIFE_POINTS: u32 = u32::MAX / (2 as u32).pow(32 - 10);
+const MAX_LIFE_POINTS: u32 = u32::MAX / 2_u32.pow(32 - 10);
 const COLOR_SATURATION_SCALE_FACTOR: f32 = 10.0;
 const COLOR_SATURATION_MINIMUM: f32 = 0.10;
 
@@ -73,9 +73,7 @@ impl Ball {
         let hue_y = 240.0 - ((v.y + 1.0) / 2.0) * 180.0;
 
         // Average the two hues for a simple blend
-        let hue = (hue_x + hue_y) / 2.0;
-
-        return hue;
+        (hue_x + hue_y) / 2.0
     }
     fn get_saturation(&self) -> f32 {
         let s = ((self.life_points as f32 / MAX_LIFE_POINTS as f32)
@@ -89,7 +87,7 @@ impl Ball {
         // Convert to HSLA, swap h and s, keep l and a as-is.
         let hsla: Hsla = color.into();
         let new_hsla = Hsla {
-            hue: self.get_hue().into(),
+            hue: self.get_hue(),
             saturation: self.get_saturation(),
             lightness: hsla.lightness,
             alpha: hsla.alpha,
@@ -97,13 +95,13 @@ impl Ball {
         Color::from(new_hsla)
     }
     pub fn get_color(&self) -> Color {
-        return Color::hsl(self.get_hue(), self.get_saturation(), 0.5);
+        Color::hsl(self.get_hue(), self.get_saturation(), 0.5)
     }
-    fn is_friendly_with(&self, other: Ball) -> bool {
+    fn is_friendly_with(&self, other: Self) -> bool {
         let scent_1 = self.genome_friendly_scent;
         let scent_2 = other.genome_friendly_scent;
         let scent_distance = (scent_1 - scent_2).length();
-        return scent_distance < self.genome_friendly_distance;
+        scent_distance < self.genome_friendly_distance
     }
 }
 
@@ -137,13 +135,9 @@ fn update_life_points(
 
     for (entity, mut ball, color_handle) in q_balls_and_colors.iter_mut() {
         // let before_life_points = ball.life_points;
-        ball.age = if ball.age != u32::MAX {
-            ball.age + 1
-        } else {
-            u32::MAX
-        };
+        ball.age = if ball.age == u32::MAX { u32::MAX } else { ball.age + 1 };
         if ball.age > ball.genome_max_age {
-            ball.life_points = ball.life_points.checked_sub(SURVIVAL_COST).unwrap_or(0);
+            ball.life_points = ball.life_points.saturating_sub(SURVIVAL_COST);
         }
         // let change = ball.life_points as i32 - before_life_points as i32;
         // if change != 0 || ball.life_points == 0 {
@@ -162,10 +156,7 @@ fn update_life_points(
             // print!("o");
             commands.entity(entity).despawn();
         }
-        let color_material = match color_materials.get_mut(color_handle) {
-            Some(color_material) => color_material,
-            None => continue,
-        };
+        let Some(color_material) = color_materials.get_mut(color_handle) else { continue };
         color_material.color = ball.transform_color(color_material.color);
     }
 
@@ -225,15 +216,9 @@ fn update_life_points(
             sharing_rate,
         );
 
-        let parent_color_material = match color_materials.get_mut(parent_color_handle) {
-            Some(color_material) => color_material,
-            None => continue,
-        };
+        let Some(parent_color_material) = color_materials.get_mut(parent_color_handle) else { continue };
         parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
-        let child_color_material = match color_materials.get_mut(child_color_handle) {
-            Some(color_material) => color_material,
-            None => continue,
-        };
+        let Some(child_color_material) = color_materials.get_mut(child_color_handle) else { continue };
         child_color_material.color = child_ball.transform_color(child_color_material.color);
     }
 }
@@ -388,9 +373,6 @@ fn reproduce_balls(
 
         let parent_color_material = color_materials.get_mut(color_handle).unwrap();
         parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
-        // Force bright green for debugging visibility parity with test ball
-        // TEMP DEBUG: neon magenta to maximize visibility
-        let _child_color_material = ColorMaterial::from(Color::hsl(300.0, 1.0, 0.5));
 
         // print!(
         //     "\nBaby: Life {: >10}, Max Age {: >10}, Reproduction Rate {: >.4}, Bite Size {: >10}, Safe Reproduction Life {: >10}",
@@ -422,9 +404,11 @@ fn reproduce_balls(
                 GlobalTransform::default(),
             ))
             .id();
+        let initial = child_ball.get_color();
         let child = commands
             .spawn((
-                bevy::sprite::Sprite::from_color(Color::hsl(0.0, 1.0, 0.6), Vec2::new(36.0, 36.0)),
+                Mesh2d(_mesh_assets.ball_circle.clone()),
+                MeshMaterial2d(color_materials.add(ColorMaterial::from(initial))),
                 Transform::from_xyz(0.0, 0.0, 0.0),
                 BallRender { parent },
             ))
@@ -441,8 +425,6 @@ struct Box2D {
     max_x: f32,
     min_y: f32,
     max_y: f32,
-    min_z: f32,
-    max_z: f32,
 }
 const SPAWN_BOX: Box2D = Box2D {
     min_x: (-0.5 * GROUND_WIDTH) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
@@ -450,8 +432,6 @@ const SPAWN_BOX: Box2D = Box2D {
     // min_y: (-0.5 *   WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
     min_y: (0.5 * WALL_HEIGHT) - (BALL_RADIUS * 4.0) - (0.5 * WALL_THICKNESS),
     max_y: (0.5 * WALL_HEIGHT) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
-    min_z: 0.0,
-    max_z: 0.0,
 };
 
 const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
@@ -540,24 +520,17 @@ fn add_balls(
         ))
         .id();
     // Use a smaller bright sprite to reduce occlusion risk
+    let initial = ball.get_color();
     let child = commands
         .spawn((
             Mesh2d(mesh_assets.ball_circle.clone()),
-            MeshMaterial2d(materials.add(ColorMaterial::from(Color::hsl(300.0, 1.0, 0.5)))),
+            MeshMaterial2d(materials.add(ColorMaterial::from(initial))),
             Transform::from_xyz(0.0, 0.0, 0.0),
             BallRender { parent: _parent },
         ))
         .id();
     eprintln!("[diag] spawned BallRender child {child:?} for parent {_parent:?} at ({x:.1},{y:.1})");
     commands.entity(_parent).add_child(child);
-    // TEMP DEBUG: Also spawn a bright square sprite marker co-parented to move with the ball
-    let marker = commands
-        .spawn((
-            bevy::sprite::Sprite::from_color(Color::hsl(60.0, 1.0, 0.6), Vec2::new(30.0, 30.0)),
-            Transform::from_xyz(0.0, 0.0, 0.0),
-        ))
-        .id();
-    commands.entity(_parent).add_child(marker);
 }
 
 const MAX_JOINTS: usize = 10;
@@ -656,16 +629,8 @@ fn contacts(
                 && (velocity1.linvel.length().abs() > velocity2.linvel.length().abs())
             {
                 let bite_size = ball1.genome_bite_size;
-                ball2.life_points = if ball2.life_points <= bite_size {
-                    0
-                } else {
-                    ball2.life_points - bite_size
-                };
-                ball1.life_points = if ball1.life_points >= (u32::MAX - bite_size) {
-                    u32::MAX
-                } else {
-                    ball1.life_points + bite_size
-                };
+                ball2.life_points = ball2.life_points.saturating_sub(bite_size);
+                ball1.life_points = ball1.life_points.saturating_add(bite_size);
                 // print!(
                 //     "\nBite {: >10}->{: >10} ({: >11})",
                 //     ball2.life_points,
@@ -676,16 +641,8 @@ fn contacts(
                 && (velocity2.linvel.length().abs() > velocity1.linvel.length().abs())
             {
                 let bite_size = ball2.genome_bite_size;
-                ball1.life_points = if ball1.life_points <= bite_size {
-                    0
-                } else {
-                    ball1.life_points - bite_size
-                };
-                ball2.life_points = if ball2.life_points >= (u32::MAX - bite_size) {
-                    u32::MAX
-                } else {
-                    ball2.life_points + bite_size
-                };
+                ball1.life_points = ball1.life_points.saturating_sub(bite_size);
+                ball2.life_points = ball2.life_points.saturating_add(bite_size);
                 // print!(
                 //     "\nBite {: >10}->{: >10} ({: >11})",
                 //     ball1.life_points,
@@ -790,27 +747,6 @@ fn unstick(
 
 pub struct BallPlugin;
 
-// Diagnostic: spawn a simple, no-physics ball via BallPlugin to test offscreen visibility
-fn spawn_debug_simple_ball(
-    mut commands: Commands,
-    mut spawned: Local<bool>,
-    mesh_assets: Option<Res<crate::setup::MeshAssets2d>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
-    if *spawned { return; }
-    let Some(mesh_assets) = mesh_assets else { return; };
-
-    let x = -200.0;
-    let y = 1800.0;
-    let material = materials.add(ColorMaterial::from(Color::hsl(120.0, 1.0, 0.5)));
-    commands.spawn((
-        Mesh2d(mesh_assets.ball_circle.clone()),
-        MeshMaterial2d(material),
-        Transform::from_xyz(x, y, 0.0),
-    ));
-    eprintln!("[diag] spawned debug simple ball at ({:.1},{:.1})", x, y);
-    *spawned = true;
-}
 
 impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
@@ -831,9 +767,8 @@ impl Plugin for BallPlugin {
         .add_systems(Update, (add_balls, reproduce_balls))
         .add_systems(Update, contacts)
         .add_systems(Update, unstick)
-        .add_systems(Update, update_life_points)
-        // Diagnostic: spawn a simple ball via the same plugin
-        .add_systems(Update, spawn_debug_simple_ball);
+        .add_systems(Update, update_life_points);
+
     }
 }
 
@@ -853,8 +788,7 @@ fn ball_render_logger(
         ACC += dt;
         if ACC >= 1.0 {
             let count = q.iter().count();
-            let mut it = q.iter();
-            let sample = it.next().map(|(_e, g)| {
+            let sample = q.iter().next().map(|(_e, g)| {
                 let t = g.translation();
                 ((t.x, t.y, t.z),)
             });
