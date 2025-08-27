@@ -580,7 +580,7 @@ fn contacts(
     rapier: bevy_rapier2d::prelude::ReadRapierContext,
     // Obtain context once; if absent, bail early
     mut contact_force_collisions: EventReader<ContactForceEvent>,
-    q_balls: Query<&mut Ball>,
+    mut q_balls: Query<&mut Ball>,
     q_children_for_balls: Query<&Children, With<Ball>>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
     q_velocities: Query<&Velocity>,
@@ -599,63 +599,48 @@ fn contacts(
         let collider1 = *collider1;
         let collider2 = *collider2;
         if *total_force_magnitude > STICKY_BREAKING_FORCE {
-            let ball1 = q_balls.get(collider1);
-            let ball2 = q_balls.get(collider2);
-            if ball1.is_err() || ball2.is_err() {
-                continue;
-            }
-            let [velocity1, velocity2] = match q_velocities.get_many([collider1, collider2]) {
+            // Mutably access both balls so changes persist
+            let [mut b1, mut b2] = match q_balls.get_many_mut([collider1, collider2]) {
+                Ok(bs) => bs,
+                Err(_) => continue,
+            };
+            let [v1, v2] = match q_velocities.get_many([collider1, collider2]) {
                 Ok(velocities) => velocities,
                 Err(_) => continue,
             };
-            let [color_material_handle1, color_material_handle2] =
-                match q_color_material_handles.get_many([collider1, collider2]) {
-                    Ok(color_material_handles) => color_material_handles,
-                    Err(_) => continue,
+
+            let scent_distance = (b1.genome_friendly_scent - b2.genome_friendly_scent).length();
+            let one_is_friendly = scent_distance < b1.genome_friendly_distance;
+            let two_is_friendly = scent_distance < b2.genome_friendly_distance;
+
+            if !(one_is_friendly && two_is_friendly) {
+                if !one_is_friendly && (v1.linvel.length().abs() > v2.linvel.length().abs()) {
+                    let bite_size = b1.genome_bite_size;
+                    b2.life_points = b2.life_points.saturating_sub(bite_size);
+                    b1.life_points = b1.life_points.saturating_add(bite_size);
+                } else if !two_is_friendly && (v2.linvel.length().abs() > v1.linvel.length().abs()) {
+                    let bite_size = b2.genome_bite_size;
+                    b1.life_points = b1.life_points.saturating_sub(bite_size);
+                    b2.life_points = b2.life_points.saturating_add(bite_size);
+                }
+
+                // Update visible colors by walking to BallRender child to find the material handle
+                let mut update_child_color = |rb_entity: Entity, ball: &Ball| {
+                    if let Ok(children) = q_children_for_balls.get(rb_entity) {
+                        for &c in children.iter() {
+                            if let Ok(handle) = q_color_material_handles.get(c) {
+                                if let Some(mat) = color_materials.get_mut(handle) {
+                                    mat.color = ball.transform_color(mat.color);
+                                }
+                                break;
+                            }
+                        }
+                    }
                 };
-
-            let mut ball2 = *ball2.unwrap();
-            let mut ball1 = *ball1.unwrap();
-            let scent_1 = ball1.genome_friendly_scent;
-            let scent_2 = ball2.genome_friendly_scent;
-            let scent_distance = (scent_1 - scent_2).length();
-            let one_is_friendly = scent_distance < ball1.genome_friendly_distance;
-            let two_is_friendly = scent_distance < ball2.genome_friendly_distance;
-
-            if one_is_friendly && two_is_friendly {
-                continue;
+                update_child_color(collider1, &b1);
+                update_child_color(collider2, &b2);
             }
-
-            if !one_is_friendly
-                && (velocity1.linvel.length().abs() > velocity2.linvel.length().abs())
-            {
-                let bite_size = ball1.genome_bite_size;
-                ball2.life_points = ball2.life_points.saturating_sub(bite_size);
-                ball1.life_points = ball1.life_points.saturating_add(bite_size);
-                // print!(
-                //     "\nBite {: >10}->{: >10} ({: >11})",
-                //     ball2.life_points,
-                //     ball1.life_points,
-                //     ball1.life_points as i32 - ball2.life_points as i32,
-                // );
-            } else if !two_is_friendly
-                && (velocity2.linvel.length().abs() > velocity1.linvel.length().abs())
-            {
-                let bite_size = ball2.genome_bite_size;
-                ball1.life_points = ball1.life_points.saturating_sub(bite_size);
-                ball2.life_points = ball2.life_points.saturating_add(bite_size);
-                // print!(
-                //     "\nBite {: >10}->{: >10} ({: >11})",
-                //     ball1.life_points,
-                //     ball2.life_points,
-                //     ball2.life_points as i32 - ball1.life_points as i32,
-                // );
-            }
-            let color_material1 = color_materials.get_mut(color_material_handle1).unwrap();
-            color_material1.color = ball1.transform_color(color_material1.color);
-            let color_material2 = color_materials.get_mut(color_material_handle2).unwrap();
-            color_material2.color = ball2.transform_color(color_material2.color);
-            continue;
+            // Do not continue here; allow joint creation logic to run below as well
         }
 
         // If the contact pair exists, that means that the broad-phase identified a potential contact.
@@ -698,17 +683,16 @@ fn contacts(
             contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
         let e2_sticky_point: Vec2 =
             contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-        let child = commands
-            .spawn(BevyImpulseJoint::new(
+        // Insert the joint directly on collider2 referencing collider1
+        commands.entity(collider2).insert(
+            BevyImpulseJoint::new(
                 collider1,
                 RevoluteJointBuilder::new()
                     .local_anchor1(e1_sticky_point)
                     .local_anchor2(e2_sticky_point)
                     .build(),
-            ))
-            .id();
-
-        commands.entity(collider2).add_child(child);
+            )
+        );
     }
 }
 
@@ -763,13 +747,13 @@ impl Plugin for BallPlugin {
         .add_systems(Update, ball_count_logger)
         // Also log BallRender companions
         .add_systems(Update, ball_render_logger)
-          // Ensure spawn -> transforms/visibility -> extract ordering
-          // Move to Update so the render extract sees them earlier this frame
-          .add_systems(Update, (add_balls, reproduce_balls))
-          .add_systems(Update, contacts.in_set(PhysicsSet::Writeback))
-          .add_systems(Update, unstick.in_set(PhysicsSet::Writeback))
-          .add_systems(Update, update_life_points);
-
+        // Ensure spawn -> transforms/visibility -> extract ordering
+        // Move to Update so the render extract sees them earlier this frame
+        .add_systems(Update, (add_balls, reproduce_balls))
+        // Run contact handling after the physics step
+        .add_systems(Update, contacts.in_set(PhysicsSet::Writeback))
+        .add_systems(Update, unstick.in_set(PhysicsSet::Writeback))
+        .add_systems(Update, update_life_points);
     }
 }
 
