@@ -244,12 +244,14 @@ fn has_too_many_adjacent_joints(
 fn get_next_ball_position(
     rng: &mut StdRng,
     rapier_context: &RapierContext,
+    exclude_entity: Entity,
     x: f32,
     y: f32,
     radius: f32,
     new_ball_radius: f32,
 ) -> Option<(f32, f32, f32, f32)> {
     let starting_angle = rng.gen_range(0.0, 2.0 * PI);
+    let circle_shape = bevy_rapier2d::parry::shape::Ball::new(new_ball_radius);
     for test_angle_ndx in 0..5 {
         let angle = starting_angle + (test_angle_ndx as f32 * (PI / 3.0));
         let total_radius = radius + new_ball_radius;
@@ -258,22 +260,22 @@ fn get_next_ball_position(
         let new_ball_x = x + total_radius * angle.cos();
         let new_ball_y = y + total_radius * angle.sin();
 
-        let circle_shape = bevy_rapier2d::parry::shape::Ball::new(new_ball_radius);
-
-        // Perform the proximity query
+        // Perform the proximity query, excluding the parent collider
         let mut hit = false;
+        let mut filter = QueryFilter::default();
+        filter.exclude_collider = Some(exclude_entity);
         rapier_context.intersect_shape(
             Vec2::new(new_ball_x, new_ball_y),
             angle,
             &circle_shape,
-            QueryFilter::default(),
+            filter,
             |_entity| { hit = true; false }
         );
         if hit { continue; }
 
         return Some((joint_x, joint_y, new_ball_x, new_ball_y));
     }
-    return None;
+    None
 }
 
 fn reproduce_balls(
@@ -286,6 +288,7 @@ fn reproduce_balls(
     _mesh_assets: Res<crate::setup::MeshAssets2d>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     q_children_and_transform_and_collider_and_color_handles_with_balls: Query<(
+        Entity,
         &Children,
         &Transform,
         &Collider,
@@ -303,7 +306,7 @@ fn reproduce_balls(
 
     let Ok(ctx) = rapier.single() else { return; };
 
-    for (children, transform, collider, color_handle, parent_ball, parent_ball_velocity) in
+    for (_parent_entity, children, transform, collider, color_handle, parent_ball, parent_ball_velocity) in
         q_children_and_transform_and_collider_and_color_handles_with_balls.iter()
     {
         if rng.gen_range(0.0, 1.0) > parent_ball.genome_relative_reproduction_rate {
@@ -322,16 +325,14 @@ fn reproduce_balls(
         let new_ball_radius: f32 = BALL_RADIUS;
 
         let (_joint_x, _joint_y, new_ball_x, new_ball_y) =
-            match get_next_ball_position(rng, &ctx, x, y, radius, new_ball_radius) {
+            match get_next_ball_position(rng, &ctx, _parent_entity, x, y, radius, new_ball_radius) {
                 Some((joint_x, joint_y, new_ball_x, new_ball_y)) => {
                     (joint_x, joint_y, new_ball_x, new_ball_y)
                 }
                 None => {
-                    if rng.gen_range(0.0, 1.0) < 0.005 {
-                        (0.0, 0.0, x, y)
-                    } else {
-                        continue;
-                    }
+                    // Probe failed; count as congestion signal and skip
+                    eprintln!("[diag] reproduce probe failed near ({x:.1},{y:.1})");
+                    continue;
                 }
             };
         // println!("{:#?}", world.inspect_entity(entity));
@@ -438,9 +439,13 @@ const SPAWN_BOX: Box2D = Box2D {
 const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
 const MAX_LINEAR_VELOCITY: Vec2 = Vec2::new(1.0, 1.0);
 
-// const STICKY_BREAKING_FORCE: f32 = 0.0000025;
-// const STICKY_BREAKING_FORCE: f32 = 0.000005;
-const STICKY_BREAKING_FORCE: f32 = 0.00001;
+// Force thresholds (simulation units)
+// Below this, contacts are considered too light to form sticky joints.
+const STICKY_MIN_FORCE: f32 = 0.05;
+// Above this, contacts are considered too strong/violent to form joints this frame.
+const STICKY_CREATION_FORCE_MAX: f32 = 20.0;
+// Joints will be removed when impulses exceed this break threshold.
+const STICKY_BREAKING_FORCE: f32 = 3.0;
 
 fn add_balls(
     time: Res<Time>,
@@ -536,7 +541,7 @@ fn add_balls(
 
 const MAX_JOINTS: usize = 10;
 const PAIRWISE_JOINTS_ALLOWED: u8 = 2;
-const JOINT_DISTANCE: f32 = BALL_RADIUS * 0.05;
+const JOINT_DISTANCE: f32 = BALL_RADIUS * 0.03;
 
 fn has_more_than_max_joints(
     q_children_for_balls: &Query<&Children, With<Ball>>,
@@ -587,6 +592,12 @@ fn contacts(
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     q_color_material_handles: Query<&MeshMaterial2d<ColorMaterial>>,
 ) {
+    // Accumulators for classification (per frame)
+    let mut collisions_total: u64 = 0;
+    let mut collisions_too_light: u64 = 0;
+    let mut collisions_stick_window: u64 = 0;
+    let mut collisions_too_strong: u64 = 0;
+
     let Ok(ctx) = rapier.single() else { return; };
 
     for ContactForceEvent {
@@ -596,9 +607,22 @@ fn contacts(
         ..
     } in contact_force_collisions.read()
     {
+        collisions_total += 1;
         let collider1 = *collider1;
         let collider2 = *collider2;
-        if *total_force_magnitude > STICKY_BREAKING_FORCE {
+        let force = *total_force_magnitude;
+
+        if force < STICKY_MIN_FORCE {
+            collisions_too_light += 1;
+            continue;
+        }
+        if force > STICKY_CREATION_FORCE_MAX {
+            collisions_too_strong += 1;
+            continue;
+        }
+        collisions_stick_window += 1;
+
+        if force > STICKY_BREAKING_FORCE {
             // Mutably access both balls so changes persist
             let [mut b1, mut b2] = match q_balls.get_many_mut([collider1, collider2]) {
                 Ok(bs) => bs,
@@ -673,26 +697,39 @@ fn contacts(
                 &collider2,
             )
         {
+            eprintln!("[diag] skip_joint caps between {:?} and {:?}", collider1, collider2);
             continue;
         }
-        // println!("Creating a new joint between collider {:?} and collider {:?}", collider1, collider2);
-        // joint.set_contacts_enabled(false);
-        // print!("+");
+    // Emit one summary line per frame
+    if collisions_total > 0 {
+        let p_light = (collisions_too_light as f32) / (collisions_total as f32) * 100.0;
+        let p_window = (collisions_stick_window as f32) / (collisions_total as f32) * 100.0;
+        let p_strong = (collisions_too_strong as f32) / (collisions_total as f32) * 100.0;
+        eprintln!(
+            "[diag] collisions classified: total={collisions_total} light={:.1}% window={:.1}% strong={:.1}%",
+            p_light, p_window, p_strong
+        );
+    }
 
-        let e1_sticky_point: Vec2 =
-            contact_point.local_p1().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-        let e2_sticky_point: Vec2 =
-            contact_point.local_p2().normalize_or_zero() * (BALL_RADIUS + JOINT_DISTANCE);
-        // Insert the joint directly on collider2 referencing collider1
-        commands.entity(collider2).insert(
-            BevyImpulseJoint::new(
+        eprintln!("[diag] joint_create attempt between {:?} and {:?}", collider1, collider2);
+
+        // Project anchors along the normal but clamp near the contact to reduce tension
+        let n1 = contact_point.local_p1().normalize_or_zero();
+        let n2 = contact_point.local_p2().normalize_or_zero();
+        let e1_sticky_point: Vec2 = n1 * (BALL_RADIUS + JOINT_DISTANCE * 0.5);
+        let e2_sticky_point: Vec2 = n2 * (BALL_RADIUS + JOINT_DISTANCE * 0.5);
+        // Create a dedicated joint entity so our children-based caps/queries see it
+        let joint_entity = commands
+            .spawn(BevyImpulseJoint::new(
                 collider1,
                 RevoluteJointBuilder::new()
                     .local_anchor1(e1_sticky_point)
                     .local_anchor2(e2_sticky_point)
                     .build(),
-            )
-        );
+            ))
+            .id();
+        commands.entity(collider2).add_child(joint_entity);
+        eprintln!("[diag] joint_create ok between {:?} and {:?} (child {:?})", collider1, collider2, joint_entity);
     }
 }
 
@@ -720,7 +757,7 @@ fn unstick(
             for impulse in rapier_joint.impulses.column_iter() {
                 let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
                 if impulse_magnitude > STICKY_BREAKING_FORCE {
-                    // print!("-");
+                    eprintln!("[diag] joint_break impulse={impulse_magnitude:.6}");
                     commands
                         .entity(*bevy_impulse_joint_entity)
                         .despawn();
