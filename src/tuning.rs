@@ -23,6 +23,22 @@ pub struct PhysicsTuning {
     pub energy_share_hostile_rand_max: f32,
     pub bite_enabled: bool,
     pub bite_size_scale: f32,
+    // Genome generation ranges for new balls
+    pub genome_bite_size_min: u32,
+    pub genome_bite_size_max: u32,
+    pub genome_energy_share_min: f32,
+    pub genome_energy_share_max: f32,
+    pub genome_friendly_distance_min: f32,
+    pub genome_friendly_distance_max: f32,
+    pub genome_friendly_scent_range: f32,
+    pub genome_max_age_min: u32,
+    pub genome_max_age_max: u32,
+    pub genome_reproduction_rate_min: f32,
+    pub genome_reproduction_rate_max: f32,
+    pub genome_safe_reproduction_points_min: u32,
+    pub genome_safe_reproduction_points_max: u32,
+    // Aging/decay
+    pub survival_cost_per_tick: u32,
     // Label visibility/thresholds
     pub show_collision_labels: bool,
     pub collision_label_force_min: f32, // display units (force / PPM)
@@ -44,6 +60,20 @@ pub struct TuningUpdate {
     pub energy_share_hostile_rand_max: Option<f32>,
     pub bite_enabled: Option<bool>,
     pub bite_size_scale: Option<f32>,
+    pub genome_bite_size_min: Option<u32>,
+    pub genome_bite_size_max: Option<u32>,
+    pub genome_energy_share_min: Option<f32>,
+    pub genome_energy_share_max: Option<f32>,
+    pub genome_friendly_distance_min: Option<f32>,
+    pub genome_friendly_distance_max: Option<f32>,
+    pub genome_friendly_scent_range: Option<f32>,
+    pub genome_max_age_min: Option<u32>,
+    pub genome_max_age_max: Option<u32>,
+    pub genome_reproduction_rate_min: Option<f32>,
+    pub genome_reproduction_rate_max: Option<f32>,
+    pub genome_safe_reproduction_points_min: Option<u32>,
+    pub genome_safe_reproduction_points_max: Option<u32>,
+    pub survival_cost_per_tick: Option<u32>,
     pub show_collision_labels: Option<bool>,
     pub collision_label_force_min: Option<f32>,
     pub show_break_labels: Option<bool>,
@@ -64,6 +94,20 @@ impl TuningUpdate {
         if let Some(v) = self.energy_share_hostile_rand_max { t.energy_share_hostile_rand_max = v; }
         if let Some(v) = self.bite_enabled { t.bite_enabled = v; }
         if let Some(v) = self.bite_size_scale { t.bite_size_scale = v; }
+        if let Some(v) = self.genome_bite_size_min { t.genome_bite_size_min = v; }
+        if let Some(v) = self.genome_bite_size_max { t.genome_bite_size_max = v; }
+        if let Some(v) = self.genome_energy_share_min { t.genome_energy_share_min = v; }
+        if let Some(v) = self.genome_energy_share_max { t.genome_energy_share_max = v; }
+        if let Some(v) = self.genome_friendly_distance_min { t.genome_friendly_distance_min = v; }
+        if let Some(v) = self.genome_friendly_distance_max { t.genome_friendly_distance_max = v; }
+        if let Some(v) = self.genome_friendly_scent_range { t.genome_friendly_scent_range = v; }
+        if let Some(v) = self.genome_max_age_min { t.genome_max_age_min = v; }
+        if let Some(v) = self.genome_max_age_max { t.genome_max_age_max = v; }
+        if let Some(v) = self.genome_reproduction_rate_min { t.genome_reproduction_rate_min = v; }
+        if let Some(v) = self.genome_reproduction_rate_max { t.genome_reproduction_rate_max = v; }
+        if let Some(v) = self.genome_safe_reproduction_points_min { t.genome_safe_reproduction_points_min = v; }
+        if let Some(v) = self.genome_safe_reproduction_points_max { t.genome_safe_reproduction_points_max = v; }
+        if let Some(v) = self.survival_cost_per_tick { t.survival_cost_per_tick = v; }
         if let Some(v) = self.show_collision_labels { t.show_collision_labels = v; }
         if let Some(v) = self.collision_label_force_min { t.collision_label_force_min = v; }
         if let Some(v) = self.show_break_labels { t.show_break_labels = v; }

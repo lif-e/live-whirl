@@ -121,6 +121,20 @@ fn main() {
         energy_share_hostile_rand_max: 0.9,
         bite_enabled: true,
         bite_size_scale: 1.0,
+        genome_bite_size_min: 0,
+        genome_bite_size_max: 400,
+        genome_energy_share_min: 0.25,
+        genome_energy_share_max: 0.75,
+        genome_friendly_distance_min: 0.15,
+        genome_friendly_distance_max: 1.0,
+        genome_friendly_scent_range: 1.0,
+        genome_max_age_min: 90,
+        genome_max_age_max: 120,
+        genome_reproduction_rate_min: 0.00625 * 1.9,
+        genome_reproduction_rate_max: 0.00625 * 2.0,
+        genome_safe_reproduction_points_min: 0,
+        genome_safe_reproduction_points_max: 1000,
+        survival_cost_per_tick: 1,
         show_collision_labels: true,
         collision_label_force_min: 2.0,
         show_break_labels: true,
@@ -133,7 +147,7 @@ fn main() {
     // System to apply updates from HTTP
     app.add_systems(Update, tuning::apply_tuning_updates_system);
     // Provide default tuning resource (so systems can read it)
-    app.insert_resource(PhysicsTuning { rel_vel_min: 0.15, rel_vel_max: 360.0, break_force_threshold: 360.0, energy_transfer_enabled: true, energy_share_diff_threshold: 100, energy_share_friendly_rate: 0.5, energy_share_parent_not_friendly_child_friendly_rate: 0.75, energy_share_parent_friendly_child_not_friendly_rate: 0.25, energy_share_hostile_rand_min: 0.5, energy_share_hostile_rand_max: 0.9, bite_enabled: true, bite_size_scale: 1.0, show_collision_labels: true, collision_label_force_min: 2.0, show_break_labels: true, break_label_impulse_min: 20.0 });
+    app.insert_resource(PhysicsTuning { rel_vel_min: 0.15, rel_vel_max: 360.0, break_force_threshold: 360.0, energy_transfer_enabled: true, energy_share_diff_threshold: 100, energy_share_friendly_rate: 0.5, energy_share_parent_not_friendly_child_friendly_rate: 0.75, energy_share_parent_friendly_child_not_friendly_rate: 0.25, energy_share_hostile_rand_min: 0.5, energy_share_hostile_rand_max: 0.9, bite_enabled: true, bite_size_scale: 1.0, genome_bite_size_min: 0, genome_bite_size_max: 400, genome_energy_share_min: 0.25, genome_energy_share_max: 0.75, genome_friendly_distance_min: 0.15, genome_friendly_distance_max: 1.0, genome_friendly_scent_range: 1.0, genome_max_age_min: 90, genome_max_age_max: 120, genome_reproduction_rate_min: 0.00625 * 1.9, genome_reproduction_rate_max: 0.00625 * 2.0, genome_safe_reproduction_points_min: 0, genome_safe_reproduction_points_max: 1000, survival_cost_per_tick: 1, show_collision_labels: true, collision_label_force_min: 2.0, show_break_labels: true, break_label_impulse_min: 20.0 });
 
     if !windowed {
         // Prevent auto-exit when there are zero windows by clearing AppExit (gated by exit flag)

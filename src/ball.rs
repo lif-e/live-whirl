@@ -217,7 +217,7 @@ struct CollisionStatsLogTimer(pub Timer);
 struct JointBorn{ frame:u64 }
 
 
-const SURVIVAL_COST: u32 = 1;
+
 
 fn update_life_points(
     mut commands: Commands,
@@ -235,26 +235,11 @@ fn update_life_points(
     }
 
     for (entity, mut ball, color_handle) in q_balls_and_colors.iter_mut() {
-        // let before_life_points = ball.life_points;
         ball.age = if ball.age == u32::MAX { u32::MAX } else { ball.age + 1 };
         if ball.age > ball.genome_max_age {
-            ball.life_points = ball.life_points.saturating_sub(SURVIVAL_COST);
+            ball.life_points = ball.life_points.saturating_sub(tuning.survival_cost_per_tick);
         }
-        // let change = ball.life_points as i32 - before_life_points as i32;
-        // if change != 0 || ball.life_points == 0 {
-        //     print!(
-        //         "\nLife {: >10}->{: >10} ({: >11}) with age {: >10}/{: >10} ({: >10})",
-        //         before_life_points,
-        //         ball.life_points,
-        //         change,
-        //         ball.age,
-        //         ball.genome_max_age,
-        //         ball.genome_max_age as i32 - ball.age as i32,
-        //     );
-        // }
-
         if ball.life_points <= 9 {
-            // print!("o");
             commands.entity(entity).despawn();
         }
         let Some(color_material) = color_materials.get_mut(color_handle) else { continue };
@@ -274,14 +259,6 @@ fn update_life_points(
                 ],
                 Err(_) => continue,
             };
-        // let parent_color_material = match color_materials.get(parent_color_handle) {
-        //     Some(color_material) => color_material,
-        //     None => continue,
-        // };
-        // let child_color_material = match color_materials.get(child_color_handle) {
-        //     Some(color_material) => color_material,
-        //     None => continue,
-        // };
         if tuning.energy_transfer_enabled {
             let parent_points: i32 = parent_ball.life_points as i32;
             let life_points_diff_abs = match parent_points.checked_sub(child_ball.life_points as i32) {
@@ -398,6 +375,7 @@ fn reproduce_balls(
         &Velocity,
     )>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
+    tuning: Res<crate::tuning::PhysicsTuning>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -453,25 +431,15 @@ fn reproduce_balls(
             life_points: child_life_points,
             genome_max_age: ((parent_ball.genome_max_age as f32 + rng.gen_range(-3.0, 3.0))
                 .clamp(0.0, u32::MAX as f32) as u32),
-            genome_relative_reproduction_rate: parent_ball.genome_relative_reproduction_rate
-                + rng.gen_range(-0.01, 0.01),
-            genome_bite_size: ((parent_ball.genome_bite_size as f32 + rng.gen_range(-10.0, 10.0))
-                .max(0.0)
-                .min(u32::MAX as f32) as u32),
-            genome_life_points_safe_to_reproduce: ((parent_ball.genome_life_points_safe_to_reproduce
-                as f32
-                + rng.gen_range(-1000.0, 1000.0))
-            .max(0.0)
-            .min(u32::MAX as f32) as u32),
-            genome_energy_share_with_children: (parent_ball.genome_energy_share_with_children
-                + rng.gen_range(-0.1, 0.1))
-            .clamp(0.0, 1.0),
+            genome_relative_reproduction_rate: (parent_ball.genome_relative_reproduction_rate + rng.gen_range(-0.01, 0.01)).clamp(tuning.genome_reproduction_rate_min, tuning.genome_reproduction_rate_max),
+            genome_bite_size: ((parent_ball.genome_bite_size as f32 + rng.gen_range(-10.0, 10.0)).max(tuning.genome_bite_size_min as f32).min(tuning.genome_bite_size_max as f32) as u32),
+            genome_life_points_safe_to_reproduce: ((parent_ball.genome_life_points_safe_to_reproduce as f32 + rng.gen_range(-1000.0, 1000.0)).max(tuning.genome_safe_reproduction_points_min as f32).min(tuning.genome_safe_reproduction_points_max as f32) as u32),
+            genome_energy_share_with_children: (parent_ball.genome_energy_share_with_children + rng.gen_range(-0.1, 0.1)).clamp(tuning.genome_energy_share_min, tuning.genome_energy_share_max),
             genome_friendly_scent: Vec2::new(
                 parent_ball.genome_friendly_scent.x + rng.gen_range(-0.1, 0.1),
                 parent_ball.genome_friendly_scent.y + rng.gen_range(-0.1, 0.1),
             ),
-            genome_friendly_distance: (parent_ball.genome_friendly_distance
-                + rng.gen_range(-0.1, 0.1)),
+            genome_friendly_distance: (parent_ball.genome_friendly_distance + rng.gen_range(-0.1, 0.1)).clamp(tuning.genome_friendly_distance_min, tuning.genome_friendly_distance_max),
         };
 
         let parent_color_material = color_materials.get_mut(color_handle).unwrap();
@@ -546,6 +514,7 @@ fn add_balls(
     mesh_assets: Res<crate::setup::MeshAssets2d>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     _q_balls: Query<Entity, With<Ball>>,
+    tuning: Res<crate::tuning::PhysicsTuning>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -557,16 +526,18 @@ fn add_balls(
         rng.gen_range(MIN_LINEAR_VELOCITY.y, MAX_LINEAR_VELOCITY.y),
     );
 
+    let t = tuning.into_inner();
+    let scent_r = t.genome_friendly_scent_range;
     let ball = Ball {
         age: 0,
         life_points: MAX_LIFE_POINTS,
-        genome_max_age: rng.gen_range(90, 120),
-        genome_relative_reproduction_rate: rng.gen_range(0.00625 * 1.9, 0.00625 * 2.0),
-        genome_bite_size: rng.gen_range(0, 400),
-        genome_life_points_safe_to_reproduce: rng.gen_range(0, 1000),
-        genome_energy_share_with_children: rng.gen_range(0.25, 0.75),
-        genome_friendly_scent: Vec2::new(rng.gen_range(-1.0, 1.0), rng.gen_range(-1.0, 1.0)),
-        genome_friendly_distance: rng.gen_range(0.15, 1.0),
+        genome_max_age: rng.gen_range(t.genome_max_age_min, t.genome_max_age_max),
+        genome_relative_reproduction_rate: rng.gen_range(t.genome_reproduction_rate_min, t.genome_reproduction_rate_max),
+        genome_bite_size: rng.gen_range(t.genome_bite_size_min, t.genome_bite_size_max),
+        genome_life_points_safe_to_reproduce: rng.gen_range(t.genome_safe_reproduction_points_min, t.genome_safe_reproduction_points_max),
+        genome_energy_share_with_children: rng.gen_range(t.genome_energy_share_min, t.genome_energy_share_max),
+        genome_friendly_scent: Vec2::new(rng.gen_range(-scent_r, scent_r), rng.gen_range(-scent_r, scent_r)),
+        genome_friendly_distance: rng.gen_range(t.genome_friendly_distance_min, t.genome_friendly_distance_max),
     };
     // Force bright green for debugging visibility parity with test ball
     // TEMP DEBUG: neon magenta to maximize visibility
