@@ -28,45 +28,74 @@ pub fn spawn_ffmpeg(
         chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S")
     );
     // Write to MP4 (faststart) and a UDP MPEG-TS preview simultaneously via tee
-    // UDP host/port configurable via env UDP_HOST and UDP_PORT; defaults 127.0.0.1:12345
-    let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    // UDP host/port configurable via env UDP_HOST and UDP_PORT; defaults 127.0.0.1:12345.
+    // UDP_HOST may be a comma-separated list of IPs to broadcast to multiple endpoints.
+    let udp_hosts: Vec<String> = env::var("UDP_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     let udp_port = env::var("UDP_PORT").unwrap_or_else(|_| "12345".to_string());
-    // Build tee outputs: MP4 file and preview sink (override via PREVIEW_URL)
-    let preview_url = env::var("PREVIEW_URL")
-        .unwrap_or_else(|_| format!("udp://{udp_host}:{udp_port}?pkt_size=1316"));
+    // Build tee outputs: MP4 file and preview sinks (override via PREVIEW_URL)
+    let preview_urls: Vec<String> = match env::var("PREVIEW_URL") {
+        Ok(url) => vec![url],
+        Err(_) => udp_hosts
+            .iter()
+            .map(|host| format!("udp://{host}:{udp_port}?pkt_size=1316"))
+            .collect(),
+    };
 
-    fn make_tee_outputs(file: &str, preview: &str) -> String {
-        format!(
-            "[f=mp4:movflags=+faststart]{file}|\
-[f=mpegts:onfail=ignore:mpegts_flags=+resend_headers+initial_discontinuity:flush_packets=1]{preview}",
-            file = file,
-            preview = preview
-        )
+    fn make_tee_outputs(file: &str, previews: &[String]) -> String {
+        let preview_sinks = previews
+            .iter()
+            .map(|preview| {
+                format!(
+                    "[f=mpegts:onfail=ignore:mpegts_flags=+resend_headers+initial_discontinuity:flush_packets=1]{preview}",
+                    preview = preview
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        format!("[f=mp4:movflags=+faststart]{file}|{preview_sinks}")
     }
-    let tee_outputs = make_tee_outputs(&filename, &preview_url);
-    eprintln!("[diag] preview tee sink: {}", preview_url);
+    let tee_outputs = make_tee_outputs(&filename, &preview_urls);
+    eprintln!("[diag] preview tee sink: {}", preview_urls.join(" | "));
 
     let mut child = Command::new("ffmpeg")
         .args([
             "-y",
             // raw RGBA frames on stdin
-            "-f", "rawvideo",
-            "-pix_fmt", "rgba",
-            "-video_size", &format!("{width}x{height}"),
-            "-framerate", &format!("{fps}"),
-            "-i", "-",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-video_size",
+            &format!("{width}x{height}"),
+            "-framerate",
+            &format!("{fps}"),
+            "-i",
+            "-",
             // convert to RGB24 for x264 and then encode YUV420p
-            "-vf", "format=rgb24",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-tune", "zerolatency",
+            "-vf",
+            "format=rgb24",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
             // keyframe cadence helps fragmented MP4 and UDP preview resilience
-            "-g", &format!("{}", fps * 2),
-            "-pix_fmt", "yuv420p",
+            "-g",
+            &format!("{}", fps * 2),
+            "-pix_fmt",
+            "yuv420p",
             // map the video stream explicitly for tee
-            "-map", "0:v:0",
+            "-map",
+            "0:v:0",
             // tee to mp4 file and UDP preview
-            "-f", "tee",
+            "-f",
+            "tee",
             &tee_outputs,
         ])
         .stdin(Stdio::piped())
@@ -89,7 +118,11 @@ pub fn spawn_ffmpeg(
     thread::spawn(move || {
         while let Ok(frame) = rx.recv() {
             if frame.len() != expected {
-                eprintln!("[diag] bad frame size {} (expected {})", frame.len(), expected);
+                eprintln!(
+                    "[diag] bad frame size {} (expected {})",
+                    frame.len(),
+                    expected
+                );
                 continue;
             }
             if let Err(e) = stdin.write_all(&frame) {
