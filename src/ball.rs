@@ -9,18 +9,20 @@ use bevy::{
         Transform, Update, Vec2, With,
     },
     render::{prelude::Mesh2d},
+    render::mesh::Mesh,
+
     sprite::{ColorMaterial, MeshMaterial2d},
 };
-use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy_rapier2d::prelude::{
     ActiveEvents, Collider, ColliderMassProperties, ContactForceEvent, Friction,
-    ImpulseJoint as BevyImpulseJoint, PhysicsSet, QueryFilter, RapierContext, RapierImpulseJointHandle,
+    ImpulseJoint as BevyImpulseJoint, QueryFilter, RapierContext, RapierImpulseJointHandle,
     Restitution, RevoluteJointBuilder, RigidBody, Velocity,
 };
 
 use crate::{
     setup::{RngResource, GROUND_WIDTH, WALL_HEIGHT, WALL_THICKNESS},
     shared_consts::PIXELS_PER_METER,
+    markers::{update_force_markers, ForceMarker},
 };
 
 pub const BALL_RADIUS: f32 = 0.05 * PIXELS_PER_METER;
@@ -31,6 +33,7 @@ const COLOR_SATURATION_MINIMUM: f32 = 0.10;
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Ball {
     pub age: u32,
+
     pub life_points: u32,
     pub genome_max_age: u32,
     pub genome_relative_reproduction_rate: f32,
@@ -41,11 +44,7 @@ pub struct Ball {
     pub genome_friendly_distance: f32,
 }
 
-// Render-only companion for a Ball entity (kept separate from physics parent)
-#[derive(Debug, Clone, Copy, PartialEq, Component)]
-pub struct BallRender {
-    pub parent: Entity,
-}
+
 
 impl Default for Ball {
     fn default() -> Self {
@@ -118,6 +117,105 @@ struct ReproduceBallsTimer(pub Timer);
 
 #[derive(Resource)]
 struct BallAndJointLoopTimer(pub Timer);
+#[derive(Resource, Default)]
+struct FrameCounter{ frame:u64 }
+
+#[derive(Resource, Default)]
+struct JointStats{
+    created:u64,
+    broke_1:u64,
+    broke_5:u64,
+    broke_30:u64,
+}
+
+#[derive(Resource, Default)]
+struct CollisionStats {
+    samples: u64,
+    force_min: f32,
+    force_max: f32,
+    force_sum: f32,
+    rel_min: f32,
+    rel_max: f32,
+    rel_sum: f32,
+    // Simple histograms for approximate percentiles
+    force_bins: [u64; 12],
+    rel_bins: [u64; 12],
+}
+
+impl CollisionStats {
+    const FORCE_EDGES: [f32; 12] = [0.1, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 24.0, 32.0, f32::INFINITY];
+    const REL_EDGES: [f32; 12] = [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, f32::INFINITY];
+
+    fn add(&mut self, force_disp: f32, rel_disp: f32) {
+        self.samples += 1;
+        if self.samples == 1 {
+            self.force_min = force_disp;
+            self.force_max = force_disp;
+            self.rel_min = rel_disp;
+            self.rel_max = rel_disp;
+        } else {
+            self.force_min = self.force_min.min(force_disp);
+            self.force_max = self.force_max.max(force_disp);
+            self.rel_min = self.rel_min.min(rel_disp);
+            self.rel_max = self.rel_max.max(rel_disp);
+        }
+        self.force_sum += force_disp;
+        self.rel_sum += rel_disp;
+        // binning
+        for (i, edge) in Self::FORCE_EDGES.iter().enumerate() {
+            if force_disp <= *edge {
+                self.force_bins[i] += 1;
+                break;
+            }
+        }
+        for (i, edge) in Self::REL_EDGES.iter().enumerate() {
+            if rel_disp <= *edge {
+                self.rel_bins[i] += 1;
+                break;
+            }
+        }
+    }
+
+    fn percentile_from_bins(bins: &[u64], edges: &[f32], p: f32) -> f32 {
+        let total: u64 = bins.iter().sum();
+        if total == 0 { return 0.0; }
+        let target = (p * total as f32).ceil() as u64;
+        let mut acc = 0u64;
+        for (i, count) in bins.iter().enumerate() {
+            acc += *count;
+            if acc >= target {
+                return edges[i];
+            }
+        }
+        edges[edges.len() - 1]
+    }
+
+    fn snapshot_and_reset(&mut self) -> (u64, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+        let n = self.samples;
+        let avg_force = if n > 0 { self.force_sum / n as f32 } else { 0.0 };
+        let avg_rel = if n > 0 { self.rel_sum / n as f32 } else { 0.0 };
+        let min_f = self.force_min;
+        let max_f = self.force_max;
+        let min_r = self.rel_min;
+        let max_r = self.rel_max;
+        let p50_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.50);
+        let p90_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.90);
+        let p99_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.99);
+        let p50_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.50);
+        let p90_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.90);
+        let p99_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.99);
+        // reset
+        *self = CollisionStats::default();
+        (n, avg_force, min_f, max_f, p50_f, p90_f, p99_f, avg_rel, min_r, max_r, p50_r, p90_r)
+    }
+}
+
+#[derive(Resource)]
+struct CollisionStatsLogTimer(pub Timer);
+
+#[derive(Component)]
+struct JointBorn{ frame:u64 }
+
 
 const SURVIVAL_COST: u32 = 1;
 
@@ -129,6 +227,8 @@ fn update_life_points(
     q_impulse_joints: Query<(&BevyImpulseJoint, &bevy::prelude::ChildOf)>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     mut rng_resource: ResMut<RngResource>,
+    q_velocities: Query<&Velocity>,
+    tuning: Res<crate::tuning::PhysicsTuning>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -182,40 +282,41 @@ fn update_life_points(
         //     Some(color_material) => color_material,
         //     None => continue,
         // };
-        let parent_points: i32 = parent_ball.life_points as i32;
-        let life_points_diff_abs = match parent_points.checked_sub(child_ball.life_points as i32) {
-            Some(life_points_diff_abs) => life_points_diff_abs.abs(),
-            None => i32::MAX,
-        };
-        let parent_is_friendly = parent_ball.is_friendly_with(child_ball);
-        let child_is_friendly = child_ball.is_friendly_with(parent_ball);
-        if parent_is_friendly && child_is_friendly && (life_points_diff_abs <= 19) {
-            continue;
-        }
-
-        let sharing_rate: f32 = if parent_is_friendly && child_is_friendly {
-            0.5
-        } else if !parent_is_friendly && !child_is_friendly {
-            if parent_ball.life_points > child_ball.life_points && life_points_diff_abs > 100 {
-                rng.gen_range(0.5, 0.9)
-            } else if parent_ball.life_points < child_ball.life_points && life_points_diff_abs > 100
-            {
-                rng.gen_range(0.1, 0.5)
+        if tuning.energy_transfer_enabled {
+            let parent_points: i32 = parent_ball.life_points as i32;
+            let life_points_diff_abs = match parent_points.checked_sub(child_ball.life_points as i32) {
+                Some(life_points_diff_abs) => life_points_diff_abs.abs(),
+                None => i32::MAX,
+            };
+            let parent_is_friendly = parent_ball.is_friendly_with(child_ball);
+            let child_is_friendly = child_ball.is_friendly_with(parent_ball);
+            if parent_is_friendly && child_is_friendly && (life_points_diff_abs as u32 <= tuning.energy_share_diff_threshold) {
+                // near-equal friendly: skip transfer
             } else {
-                0.5
+                let sharing_rate: f32 = if parent_is_friendly && child_is_friendly {
+                    tuning.energy_share_friendly_rate
+                } else if !parent_is_friendly && !child_is_friendly {
+                    if parent_ball.life_points > child_ball.life_points && (life_points_diff_abs as u32) > tuning.energy_share_diff_threshold {
+                        rng.gen_range(tuning.energy_share_hostile_rand_min, tuning.energy_share_hostile_rand_max)
+                    } else if parent_ball.life_points < child_ball.life_points && (life_points_diff_abs as u32) > tuning.energy_share_diff_threshold {
+                        rng.gen_range(0.1, 0.5)
+                    } else {
+                        0.5
+                    }
+                } else if !parent_is_friendly && child_is_friendly {
+                    tuning.energy_share_parent_not_friendly_child_friendly_rate
+                } else if parent_is_friendly && !child_is_friendly {
+                    tuning.energy_share_parent_friendly_child_not_friendly_rate
+                } else {
+                    0.5
+                };
+                (parent_ball.life_points, child_ball.life_points) = share_total_roughly(
+                    parent_ball.life_points,
+                    child_ball.life_points,
+                    sharing_rate,
+                );
             }
-        } else if !parent_is_friendly && child_is_friendly {
-            0.75
-        } else if parent_is_friendly && !child_is_friendly {
-            0.25
-        } else {
-            0.5
-        };
-        (parent_ball.life_points, child_ball.life_points) = share_total_roughly(
-            parent_ball.life_points,
-            child_ball.life_points,
-            sharing_rate,
-        );
+        }
 
         let Some(parent_color_material) = color_materials.get_mut(parent_color_handle) else { continue };
         parent_color_material.color = parent_ball.transform_color(parent_color_material.color);
@@ -387,8 +488,9 @@ fn reproduce_balls(
 
         eprintln!("[diag] reproduce spawn at ({:.1},{:.1})", new_ball_x, new_ball_y);
 
-        // Spawn physics parent and render child separately
-        let parent = commands
+        // Spawn physics entity with render components combined (no BallRender child)
+        let initial = child_ball.get_color();
+        let _entity = commands
             .spawn((
                 child_ball,
                 RigidBody::Dynamic,
@@ -400,22 +502,13 @@ fn reproduce_balls(
                     angvel: 0.0,
                 },
                 ActiveEvents::CONTACT_FORCE_EVENTS,
-                // Ccd::enabled(),
                 Restitution::new(0.1),
                 Transform::from_xyz(new_ball_x, new_ball_y, 0.0),
                 GlobalTransform::default(),
-            ))
-            .id();
-        let initial = child_ball.get_color();
-        let child = commands
-            .spawn((
                 Mesh2d(_mesh_assets.ball_circle.clone()),
                 MeshMaterial2d(color_materials.add(ColorMaterial::from(initial))),
-                Transform::from_xyz(0.0, 0.0, 0.0),
-                BallRender { parent },
             ))
             .id();
-        commands.entity(parent).add_child(child);
     }
 }
 
@@ -439,13 +532,10 @@ const SPAWN_BOX: Box2D = Box2D {
 const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
 const MAX_LINEAR_VELOCITY: Vec2 = Vec2::new(1.0, 1.0);
 
-// Force thresholds (simulation units)
-// Below this, contacts are considered too light to form sticky joints.
+// Legacy constants retained for reference; live values come from PhysicsTuning
 const STICKY_MIN_FORCE: f32 = 0.05;
-// Above this, contacts are considered too strong/violent to form joints this frame.
 const STICKY_CREATION_FORCE_MAX: f32 = 20.0;
-// Joints will be removed when impulses exceed this break threshold.
-const STICKY_BREAKING_FORCE: f32 = 3.0;
+const STICKY_BREAKING_FORCE: f32 = 20.0;
 
 fn add_balls(
     time: Res<Time>,
@@ -506,8 +596,9 @@ fn add_balls(
 
     // update our timer with the time elapsed since the last update
     // if that caused the timer to finish, we say hello to everyone
-    // Spawn physics parent (no render) and a render child (pure sprite)
-    let _parent = commands
+    // Spawn single entity with both physics and render components
+    let initial = ball.get_color();
+    let _entity = commands
         .spawn((
             ball,
             RigidBody::Dynamic,
@@ -520,28 +611,18 @@ fn add_balls(
             },
             ActiveEvents::CONTACT_FORCE_EVENTS,
             Restitution::new(0.1),
-            // Ensure visibility hierarchy is established for the render child
             Transform::from_xyz(x, y, 0.0),
             GlobalTransform::default(),
-        ))
-        .id();
-    // Use a smaller bright sprite to reduce occlusion risk
-    let initial = ball.get_color();
-    let child = commands
-        .spawn((
             Mesh2d(mesh_assets.ball_circle.clone()),
             MeshMaterial2d(materials.add(ColorMaterial::from(initial))),
-            Transform::from_xyz(0.0, 0.0, 0.0),
-            BallRender { parent: _parent },
         ))
         .id();
-    eprintln!("[diag] spawned BallRender child {child:?} for parent {_parent:?} at ({x:.1},{y:.1})");
-    commands.entity(_parent).add_child(child);
 }
 
 const MAX_JOINTS: usize = 10;
 const PAIRWISE_JOINTS_ALLOWED: u8 = 2;
 const JOINT_DISTANCE: f32 = BALL_RADIUS * 0.03;
+
 
 fn has_more_than_max_joints(
     q_children_for_balls: &Query<&Children, With<Ball>>,
@@ -582,22 +663,24 @@ fn already_has_max_pairwise_joints(
 
 fn contacts(
     mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
     rapier: bevy_rapier2d::prelude::ReadRapierContext,
     // Obtain context once; if absent, bail early
     mut contact_force_collisions: EventReader<ContactForceEvent>,
+
     mut q_balls: Query<&mut Ball>,
     q_children_for_balls: Query<&Children, With<Ball>>,
     q_bevy_impulse_joints: Query<&BevyImpulseJoint>,
     q_velocities: Query<&Velocity>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     q_color_material_handles: Query<&MeshMaterial2d<ColorMaterial>>,
+    q_global_transforms: Query<&GlobalTransform>,
+    q_is_ball: Query<(), With<Ball>>,
+    q_existing_markers: Query<(&Transform, &ForceMarker)>,
+    frame_counter: ResMut<FrameCounter>,
+    mut joint_stats: ResMut<JointStats>,
+    tuning: Res<crate::tuning::PhysicsTuning>,
 ) {
-    // Accumulators for classification (per frame)
-    let mut collisions_total: u64 = 0;
-    let mut collisions_too_light: u64 = 0;
-    let mut collisions_stick_window: u64 = 0;
-    let mut collisions_too_strong: u64 = 0;
-
     let Ok(ctx) = rapier.single() else { return; };
 
     for ContactForceEvent {
@@ -607,22 +690,59 @@ fn contacts(
         ..
     } in contact_force_collisions.read()
     {
-        collisions_total += 1;
         let collider1 = *collider1;
         let collider2 = *collider2;
         let force = *total_force_magnitude;
 
-        if force < STICKY_MIN_FORCE {
-            collisions_too_light += 1;
-            continue;
-        }
-        if force > STICKY_CREATION_FORCE_MAX {
-            collisions_too_strong += 1;
-            continue;
-        }
-        collisions_stick_window += 1;
 
-        if force > STICKY_BREAKING_FORCE {
+        // Record stats before further filtering
+        let rel_speed = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
+            (v1.linvel - v2.linvel).length()
+        } else { 0.0 };
+        // stats collection removed to reduce system params
+
+        // Filter: only show markers for ball-to-ball collisions
+        let is_ball1 = q_is_ball.get(collider1).is_ok();
+        let is_ball2 = q_is_ball.get(collider2).is_ok();
+        if is_ball1 && is_ball2 && !already_has_max_pairwise_joints(&q_children_for_balls, &q_bevy_impulse_joints, &collider1, &collider2) {
+            // Skip negligible contacts: very low relative speed OR very small force
+            let mut negligible = false;
+            if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
+                let rel = v1.linvel - v2.linvel;
+                // Use live tuning value for negligible filtering
+                if rel.length() < tuning.rel_vel_min { negligible = true; }
+            }
+            // Only relative-velocity based negligible filter
+            if negligible {
+                // Show white collision label for non-sticking collision (neg result)
+                if tuning.show_collision_labels {
+                    let display_force = force / PIXELS_PER_METER;
+                    if display_force >= tuning.collision_label_force_min {
+                        if let (Ok(tf1), Ok(tf2)) = (q_global_transforms.get(collider1), q_global_transforms.get(collider2)) {
+                            let mid = (tf1.translation().truncate() + tf2.translation().truncate()) * 0.5;
+                            let epsilon_x = 50.0; // pixels
+                            let mut max_stack: u32 = 0;
+                            for (tf, _) in q_existing_markers.iter() {
+                                let dx = (tf.translation.x - mid.x).abs();
+                                if dx < epsilon_x {
+                                    let dy = (tf.translation.y - mid.y).max(0.0);
+                                    let line_sep = 1.2 * (2.0 * BALL_RADIUS);
+                                    let approx_stack = (dy / line_sep).floor() as u32;
+                                    if approx_stack > max_stack { max_stack = approx_stack; }
+                                }
+                            }
+                            let stack_lines = max_stack + 1;
+                            crate::markers::spawn_force_marker(&mut commands, &mut meshes, &mut color_materials, mid, format!("{:.1}", display_force), Color::srgba(1.0, 1.0, 1.0, 1.0), stack_lines);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Green labels are only spawned after a successful joint creation below
+        }
+
+        if force > tuning.break_force_threshold {
             // Mutably access both balls so changes persist
             let [mut b1, mut b2] = match q_balls.get_many_mut([collider1, collider2]) {
                 Ok(bs) => bs,
@@ -688,6 +808,40 @@ fn contacts(
             None => continue,
         };
 
+
+        // Relative velocity gate for joint creation
+        let mut rel_ok = false;
+        let rel_len = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
+            let r = (v1.linvel - v2.linvel).length();
+            rel_ok = r >= tuning.rel_vel_min && r <= tuning.rel_vel_max;
+            r
+        } else { 0.0 };
+        if !rel_ok {
+            // Non-sticking collision (white label if above threshold)
+            if tuning.show_collision_labels {
+                let display_force = force / PIXELS_PER_METER;
+                if display_force >= tuning.collision_label_force_min {
+                    if let (Ok(tf1), Ok(tf2)) = (q_global_transforms.get(collider1), q_global_transforms.get(collider2)) {
+                        let mid = (tf1.translation().truncate() + tf2.translation().truncate()) * 0.5;
+                        let epsilon_x = 50.0; // pixels
+                        let mut max_stack: u32 = 0;
+                        for (tf, _) in q_existing_markers.iter() {
+                            let dx = (tf.translation.x - mid.x).abs();
+                            if dx < epsilon_x {
+                                let dy = (tf.translation.y - mid.y).max(0.0);
+                                let line_sep = 1.2 * (2.0 * BALL_RADIUS);
+                                let approx_stack = (dy / line_sep).floor() as u32;
+                                if approx_stack > max_stack { max_stack = approx_stack; }
+                            }
+                        }
+                        let stack_lines = max_stack + 1;
+                        crate::markers::spawn_force_marker(&mut commands, &mut meshes, &mut color_materials, mid, format!("{:.1}", display_force), Color::srgba(1.0, 1.0, 1.0, 1.0), stack_lines);
+                    }
+                }
+            }
+            continue;
+        }
+
         if has_more_than_max_joints(&q_children_for_balls, &collider1)
             || has_more_than_max_joints(&q_children_for_balls, &collider2)
             || already_has_max_pairwise_joints(
@@ -697,21 +851,8 @@ fn contacts(
                 &collider2,
             )
         {
-            eprintln!("[diag] skip_joint caps between {:?} and {:?}", collider1, collider2);
             continue;
         }
-    // Emit one summary line per frame
-    if collisions_total > 0 {
-        let p_light = (collisions_too_light as f32) / (collisions_total as f32) * 100.0;
-        let p_window = (collisions_stick_window as f32) / (collisions_total as f32) * 100.0;
-        let p_strong = (collisions_too_strong as f32) / (collisions_total as f32) * 100.0;
-        eprintln!(
-            "[diag] collisions classified: total={collisions_total} light={:.1}% window={:.1}% strong={:.1}%",
-            p_light, p_window, p_strong
-        );
-    }
-
-        eprintln!("[diag] joint_create attempt between {:?} and {:?}", collider1, collider2);
 
         // Project anchors along the normal but clamp near the contact to reduce tension
         let n1 = contact_point.local_p1().normalize_or_zero();
@@ -720,30 +861,69 @@ fn contacts(
         let e2_sticky_point: Vec2 = n2 * (BALL_RADIUS + JOINT_DISTANCE * 0.5);
         // Create a dedicated joint entity so our children-based caps/queries see it
         let joint_entity = commands
-            .spawn(BevyImpulseJoint::new(
-                collider1,
-                RevoluteJointBuilder::new()
-                    .local_anchor1(e1_sticky_point)
-                    .local_anchor2(e2_sticky_point)
-                    .build(),
+            .spawn((
+                BevyImpulseJoint::new(
+                    collider1,
+                    RevoluteJointBuilder::new()
+                        .local_anchor1(e1_sticky_point)
+                        .local_anchor2(e2_sticky_point)
+                        .build(),
+                ),
+                JointBorn { frame: frame_counter.frame },
             ))
             .id();
+        joint_stats.created += 1;
         commands.entity(collider2).add_child(joint_entity);
         eprintln!("[diag] joint_create ok between {:?} and {:?} (child {:?})", collider1, collider2, joint_entity);
+        // Green label for successful stick
+        if tuning.show_collision_labels {
+            let display_force = force / PIXELS_PER_METER;
+            if display_force >= tuning.collision_label_force_min {
+                if let (Ok(tf1), Ok(tf2)) = (q_global_transforms.get(collider1), q_global_transforms.get(collider2)) {
+                    let mid = (tf1.translation().truncate() + tf2.translation().truncate()) * 0.5;
+                    let epsilon_x = 50.0; // pixels
+                    let mut max_stack: u32 = 0;
+                    for (tf, _) in q_existing_markers.iter() {
+                        let dx = (tf.translation.x - mid.x).abs();
+                        if dx < epsilon_x {
+                            let dy = (tf.translation.y - mid.y).max(0.0);
+                            let line_sep = 1.2 * (2.0 * BALL_RADIUS);
+                            let approx_stack = (dy / line_sep).floor() as u32;
+                            if approx_stack > max_stack { max_stack = approx_stack; }
+                        }
+                    }
+                    let stack_lines = max_stack + 1;
+                    crate::markers::spawn_force_marker(&mut commands, &mut meshes, &mut color_materials, mid, format!("{:.1}", display_force), Color::srgba(0.2, 1.0, 0.2, 1.0), stack_lines);
+                }
+            }
+        }
     }
 }
+
 
 fn unstick(
     mut commands: Commands,
     rapier: bevy_rapier2d::prelude::ReadRapierContext,
-    q_children_for_balls_with_children: Query<&Children, With<Ball>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+
+    q_balls_with_children: Query<(Entity, &Children), With<Ball>>,
     q_rapier_handles_with_bevy_impulse_joints: Query<
         &RapierImpulseJointHandle,
         With<BevyImpulseJoint>,
     >,
+    q_joint_born: Query<&JointBorn>,
+    q_global_transforms: Query<&GlobalTransform>,
+    q_existing_markers: Query<(&Transform, &ForceMarker)>,
+    frame_counter: ResMut<FrameCounter>,
+
+    mut joint_stats: ResMut<JointStats>,
+    tuning: Res<crate::tuning::PhysicsTuning>,
+
 ) {
-    for ball_children in q_children_for_balls_with_children.iter() {
-        for child_entity in ball_children.iter() {
+    for (_ball_entity, children) in q_balls_with_children.iter() {
+
+        for child_entity in children.iter() {
             let rapier_handle = match q_rapier_handles_with_bevy_impulse_joints.get(*child_entity) {
                 Ok(rapier_handle) => rapier_handle,
                 Err(_) => continue,
@@ -756,8 +936,37 @@ fn unstick(
             };
             for impulse in rapier_joint.impulses.column_iter() {
                 let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
-                if impulse_magnitude > STICKY_BREAKING_FORCE {
+                if impulse_magnitude > tuning.break_force_threshold {
                     eprintln!("[diag] joint_break impulse={impulse_magnitude:.6}");
+                    if let Ok(born) = q_joint_born.get(*bevy_impulse_joint_entity) {
+                        let age = frame_counter.frame.saturating_sub(born.frame);
+                        if age <= 1 { joint_stats.broke_1 += 1; }
+                        if age <= 5 { joint_stats.broke_5 += 1; }
+                        if age <= 30 { joint_stats.broke_30 += 1; }
+                    }
+                    if tuning.show_break_labels && impulse_magnitude >= tuning.break_label_impulse_min {
+                        // Spawn red marker at the parent ball's transform (joint entity has no Transform)
+                        // Stack above nearby markers at the parent ball's position
+                        let pos = if let Ok(ball_tf) = q_global_transforms.get(_ball_entity) {
+                            Vec2::new(ball_tf.translation().x, ball_tf.translation().y)
+                        } else {
+                            Vec2::ZERO
+                        };
+                        let epsilon_x = 50.0;
+                        let mut max_stack: u32 = 0;
+                        for (tf, _) in q_existing_markers.iter() {
+                            let dx = (tf.translation.x - pos.x).abs();
+                            if dx < epsilon_x {
+                                let dy = (tf.translation.y - pos.y).max(0.0);
+                                let line_sep = 1.2 * (2.0 * BALL_RADIUS);
+                                let approx_stack = (dy / line_sep).floor() as u32;
+                                if approx_stack > max_stack { max_stack = approx_stack; }
+                            }
+                        }
+                        let stack_lines = max_stack + 1;
+                        crate::markers::spawn_force_marker(&mut commands, &mut meshes, &mut materials, pos, format!("{:.1}", impulse_magnitude), Color::srgba(1.0, 0.2, 0.2, 1.0), stack_lines);
+                    }
+
                     commands
                         .entity(*bevy_impulse_joint_entity)
                         .despawn();
@@ -769,67 +978,33 @@ fn unstick(
 
 pub struct BallPlugin;
 
-
 impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(
-            NewBallsTimer(Timer::from_seconds(2.0, TimerMode::Repeating)),
-        )
-        .insert_resource(ReproduceBallsTimer(Timer::from_seconds(
-            0.025,
-            TimerMode::Repeating,
-        )))
-        .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
-        // Periodic debug logging of ball count (every ~2s)
-        .add_systems(Update, ball_count_logger)
-        // Also log BallRender companions
-        .add_systems(Update, ball_render_logger)
-        // Ensure spawn -> transforms/visibility -> extract ordering
-        // Move to Update so the render extract sees them earlier this frame
-        .add_systems(Update, (add_balls, reproduce_balls))
-        // Run contact handling after the physics step
-        .add_systems(Update, contacts.in_set(PhysicsSet::Writeback))
-        .add_systems(Update, unstick.in_set(PhysicsSet::Writeback))
-        .add_systems(Update, update_life_points);
+        app.insert_resource(NewBallsTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
+            .insert_resource(ReproduceBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)))
+            .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
+            .insert_resource(FrameCounter::default())
+            .insert_resource(JointStats::default())
+            .insert_resource(CollisionStats::default())
+            .insert_resource(CollisionStatsLogTimer(Timer::from_seconds(1.0, TimerMode::Repeating)))
+            .add_systems(Update, (add_balls, reproduce_balls))
+            .add_systems(Update, contacts)
+            .add_systems(Update, unstick)
+            .add_systems(Update, update_force_markers)
+            .add_systems(Update, collision_stats_logger)
+            .add_systems(Update, update_life_points);
     }
 }
 
-fn ball_render_logger(
-    q: Query<
-        (
-            Entity,
-            &GlobalTransform,
-        ),
-        With<BallRender>
-    >,
+fn collision_stats_logger(
     time: Res<Time>,
+    mut timer: ResMut<CollisionStatsLogTimer>,
+    mut stats: ResMut<CollisionStats>,
 ) {
-    static mut ACC: f32 = 0.0;
-    let dt = time.delta_secs();
-    unsafe {
-        ACC += dt;
-        if ACC >= 1.0 {
-            let count = q.iter().count();
-            let sample = q.iter().next().map(|(_e, g)| {
-                let t = g.translation();
-                ((t.x, t.y, t.z),)
-            });
-            eprintln!("[diag] ball_render: count={count} sample={sample:?}");
-            ACC = 0.0;
-        }
-    }
-}
-
-
-fn ball_count_logger(q: Query<Entity, With<Ball>>, time: Res<Time>) {
-    static mut ACCUM: f32 = 0.0;
-    let dt = time.delta_secs();
-    unsafe {
-        ACCUM += dt;
-        if ACCUM >= 2.0 {
-            eprintln!("[diag] balls={}", q.iter().count());
-            ACCUM = 0.0;
-        }
+    if !timer.0.tick(time.delta()).just_finished() { return; }
+    let (n, avg_f, min_f, max_f, p50_f, p90_f, p99_f, avg_r, min_r, max_r, p50_r, p90_r) = stats.snapshot_and_reset();
+    if n > 0 {
+        eprintln!("[diag] collisions stats: n={n} force avg={avg_f:.2} min={min_f:.2} max={max_f:.2} p50={p50_f:.2} p90={p90_f:.2} p99={p99_f:.2} | rel avg={avg_r:.2} min={min_r:.2} max={max_r:.2} p50={p50_r:.2} p90={p90_r:.2}");
     }
 }
 

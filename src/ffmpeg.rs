@@ -31,10 +31,20 @@ pub fn spawn_ffmpeg(
     // UDP host/port configurable via env UDP_HOST and UDP_PORT; defaults 127.0.0.1:12345
     let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let udp_port = env::var("UDP_PORT").unwrap_or_else(|_| "12345".to_string());
-    // Avoid empty_moov to improve compatibility; let ffmpeg finalize moov at exit
-    let tee_outputs = format!(
-        "[f=mp4:movflags=+faststart]{filename}|[f=mpegts]udp://{udp_host}:{udp_port}?pkt_size=1316",
-    );
+    // Build tee outputs: MP4 file and preview sink (override via PREVIEW_URL)
+    let preview_url = env::var("PREVIEW_URL")
+        .unwrap_or_else(|_| format!("udp://{udp_host}:{udp_port}?pkt_size=1316"));
+
+    fn make_tee_outputs(file: &str, preview: &str) -> String {
+        format!(
+            "[f=mp4:movflags=+faststart]{file}|\
+[f=mpegts:onfail=ignore:mpegts_flags=+resend_headers+initial_discontinuity:flush_packets=1]{preview}",
+            file = file,
+            preview = preview
+        )
+    }
+    let tee_outputs = make_tee_outputs(&filename, &preview_url);
+    eprintln!("[diag] preview tee sink: {}", preview_url);
 
     let mut child = Command::new("ffmpeg")
         .args([

@@ -1,17 +1,28 @@
+SHELL := bash
+
+# Common bits
+ENV_RELEASE := RUST_LOG=info,bevy=info,wgpu_core=warn,wgpu_hal=warn WGPU_BACKEND=metal
+LOG_GREP    := grep --line-buffered -E "\[diag\]|\[ffmpeg\]"
+
 # Simple, self-documenting Makefile for common workflows
 # Usage: make [target]
 # Run `make help` to list available commands
 
-.PHONY: help build run-windowed run-headless-video run-headless-video-quiet run-headless-video-log run-headless-video-build test fmt clippy clean
+.PHONY: help build run-headless-video run-headless-video-build run-headless-video-build-release test fmt clippy clean
+
+# Configurable preview parameters
+UDP_HOST ?= 127.0.0.1
+UDP_PORT ?= 12345
+VIDEO_FPS ?= 60
+
 
 help:
 	@echo "Available targets:"
 	@echo "  build                   - Build the project (debug)"
-	@echo "  run-windowed            - Run in windowed mode (interactive)"
 	@echo "  run-headless-video      - Run headless with video export (writes MP4 via ffmpeg)"
-	@echo "  run-headless-video-quiet- Same as above but filters to only [diag] logs"
-	@echo "  run-headless-video-log  - Same as above; logs to run.log"
 	@echo "  run-headless-video-build- Build then run headless+video with [diag] logs"
+	@echo "  run-headless-video-build-release - Build then run headless+video as release"
+	@echo "  preview-udp             - Preview the UDP stream (env: UDP_HOST/UDP_PORT/VIDEO_FPS)"
 	@echo "  test                    - Run cargo tests"
 	@echo "  fmt                     - Format code with rustfmt"
 	@echo "  clippy                  - Lint with Clippy (warnings as errors)"
@@ -20,25 +31,22 @@ help:
 build:
 	cargo build
 
-run-windowed:
-	cargo run
-
 run-headless-video:
 	VIDEO_EXPORT=1 cargo run
 
-run-headless-video-quiet:
-	@echo "Running headless+video; showing only [diag] lines"
-	@VIDEO_EXPORT=1 cargo run 2>&1 | grep -E "\[diag\]|\[ffmpeg\]" || true
+# Target-specific profile selector
+run-headless-video-build:           PROFILE :=
+run-headless-video-build-release:   PROFILE := --release
 
-# Diagnostics-only variant (stderr to file)
-run-headless-video-log:
-	@echo "Running headless+video; full logs -> run.log; showing [diag]/[ffmpeg] live"
-	@VIDEO_EXPORT=1 cargo run 2>&1 | tee run.log | grep -E "\[diag\]|\[ffmpeg\]" || true
-
-# Build + run in one step using shell operators per request
-run-headless-video-build:
-	@echo "Build + run headless+video with diagnostics"
-	@cargo build && (VIDEO_EXPORT=1 cargo run 2>&1 | tee run.log | grep -E "\[diag\]|\[ffmpeg\]" || true)
+# One recipe for both targets
+run-headless-video-build run-headless-video-build-release:
+	@set -euo pipefail; \
+	echo "Build + run headless+video $(if $(PROFILE),release,with diagnostics)"; \
+	cargo build $(PROFILE); \
+	echo "Launching... UDP=$(UDP_HOST):$(UDP_PORT)"; \
+	UDP_HOST="$(UDP_HOST)" UDP_PORT="$(UDP_PORT)" VIDEO_EXPORT=1 \
+	$(if $(PROFILE),$(ENV_RELEASE),) \
+	cargo run $(PROFILE) 2>&1 | tee run.log | $(LOG_GREP) || true
 
 test:
 	cargo test
@@ -57,9 +65,15 @@ clean:
 # Preview UDP stream alongside recording (uses ffplay)
 .PHONY: preview-udp
 preview-udp:
+	# Bind and listen on the local UDP port so ffplay keeps the socket open and
+	# automatically resumes when a new ffmpeg process starts sending again.
+	# Using udp://@:PORT with listen=1 avoids "connected" UDP semantics that can
+	# drop packets from a new sender after restarts.
 	ffplay \
-	  -fflags nobuffer -flags low_delay -fflags discardcorrupt \
-	  -sync ext -framedrop \
+	  -flags low_delay \
+	  -fflags nobuffer+discardcorrupt+igndts+genpts \
+	  -use_wallclock_as_timestamps 1 \
+	  -sync video -framedrop \
 	  -probesize 32 -analyzeduration 0 \
-	  'udp://127.0.0.1:12345?overrun_nonfatal=1&fifo_size=5000000' \
-	  -vf fps=60
+	  'udp://@:$(UDP_PORT)?listen=1&reuse=1&overrun_nonfatal=1&fifo_size=5000000' \
+	  -vf 'fps=$(VIDEO_FPS),setpts=N/($(VIDEO_FPS)*TB)'

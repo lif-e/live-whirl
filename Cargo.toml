@@ -5,16 +5,23 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-# Enable max optimizations for dependencies, but not for our code:
+# Enable max optimizations for dependencies
 [profile.dev.package."*"]
 opt-level = 3
-# opt-level = 0
 
-# Enable only a small amount of optimization in debug mode
+# Enable max optimizations in debug mode
 [profile.dev]
 opt-level = 3
-# opt-level = 1
-# opt-level = 0
+
+[profile.release]
+opt-level = 3          # max speed (default in release, but make it explicit)
+lto = "fat"            # best cross-crate optimization (slower builds than "thin")
+codegen-units = 1      # enables more inlining across units (slower compile)
+panic = "abort"        # removes unwinding machinery (smaller & a bit faster)
+debug = 0              # no debug info (optional; size, not speed)
+incremental = false    # ensure full, non-incremental optimizations
+overflow-checks = false
+debug-assertions = false
 
 [dependencies]
 rand = "0.7.0"
@@ -23,8 +30,21 @@ coolor = "*"
 bevy = { version = "0.16.1" }
 crossbeam-channel = "0.5"
 # keep only a single crossbeam-channel entry
-bevy_rapier2d = { version = "0.31.0", features = ["simd-stable", "parallel", "debug-render-2d"] }
+bevy_rapier2d = { version = "0.31.0", features = [
+    "simd-stable",
+    "parallel",
+    "debug-render-2d",
+] }
 bevy_core_pipeline = "0.16.1"
 ctrlc = "3.4.7"
-# bevy_rapier2d = { version = "0.22.0", features = ["simd-stable", "debug-render-2d"] }
+axum = "0.8.4"
+tokio = { version = "1.47.1", features = [
+    "rt",
+    "macros",
+    "net",
+] }
+serde = { version = "1.0.219", features = [
+    "derive"
+] }
+serde_json = "1.0.143"
 

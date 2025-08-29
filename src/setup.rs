@@ -115,7 +115,7 @@ pub fn setup_graphics(
     let export = video_req.as_deref().copied().unwrap_or(VideoExportRequest {
         width: 1080,
         height: 1920,
-        fps: 60,
+        fps: std::env::var("VIDEO_FPS").ok().and_then(|s| s.parse().ok()).unwrap_or(60),
     });
 
     // Create a simple offscreen render target only when video export is requested
@@ -132,7 +132,7 @@ pub fn setup_graphics(
         rc.gravity = Vec2::new(0.0, -9.8 * PIXELS_PER_METER * 0.000_625 * 100.0);
     }
     *timestep_mode = TimestepMode::Fixed {
-        dt: 1.0 / 60.0,
+        dt: 1.0 / export.fps as f32,
         substeps: 1,
     };
 
