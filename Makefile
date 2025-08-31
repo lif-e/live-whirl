@@ -32,7 +32,7 @@ build:
 	cargo build
 
 run-headless-video:
-	VIDEO_EXPORT=1 cargo run
+	VIDEO_EXPORT=1 RUST_BACKTRACE=full cargo run
 
 # Target-specific profile selector
 run-headless-video-build:           PROFILE :=
@@ -46,7 +46,7 @@ run-headless-video-build run-headless-video-build-release:
 	echo "Launching... UDP=$(UDP_HOST):$(UDP_PORT)"; \
 	UDP_HOST="$(UDP_HOST)" UDP_PORT="$(UDP_PORT)" VIDEO_EXPORT=1 \
 	$(if $(PROFILE),$(ENV_RELEASE),) \
-	cargo run $(PROFILE) 2>&1 | tee run.log | $(LOG_GREP) || true
+	RUST_BACKTRACE=full cargo run $(PROFILE) 2>&1 | tee run.log | $(LOG_GREP) || true
 
 test:
 	cargo test

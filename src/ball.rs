@@ -109,7 +109,7 @@ fn share_total_roughly(preferred_number: u32, other_number: u32, sharing_rate: f
     let total_life_points: u64 = preferred_number as u64 + other_number as u64;
     let lower_part: u32 = (total_life_points as f32 / (1.0 / sharing_rate)).floor() as u32;
     let higher_part = (total_life_points - lower_part as u64) as u32;
-    return (higher_part, lower_part);
+    (higher_part, lower_part)
 }
 
 #[derive(Resource)]
@@ -142,6 +142,7 @@ struct CollisionStats {
     rel_bins: [u64; 12],
 }
 
+#[allow(dead_code)]
 impl CollisionStats {
     const FORCE_EDGES: [f32; 12] = [0.1, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 24.0, 32.0, f32::INFINITY];
     const REL_EDGES: [f32; 12] = [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, f32::INFINITY];
@@ -203,7 +204,7 @@ impl CollisionStats {
         let p99_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.99);
         let p50_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.50);
         let p90_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.90);
-        let p99_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.99);
+
         // reset
         *self = CollisionStats::default();
         (n, avg_force, min_f, max_f, p50_f, p90_f, p99_f, avg_rel, min_r, max_r, p50_r, p90_r)
@@ -218,7 +219,7 @@ struct JointBorn{ frame:u64 }
 
 
 
-
+#[allow(clippy::too_many_arguments)]
 fn update_life_points(
     mut commands: Commands,
     mut timer: ResMut<BallAndJointLoopTimer>,
@@ -227,7 +228,7 @@ fn update_life_points(
     q_impulse_joints: Query<(&BevyImpulseJoint, &bevy::prelude::ChildOf)>,
     mut color_materials: ResMut<Assets<ColorMaterial>>,
     mut rng_resource: ResMut<RngResource>,
-    q_velocities: Query<&Velocity>,
+    _q_velocities: Query<&Velocity>, // retained for future use
     tuning: Res<crate::tuning::PhysicsTuning>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
@@ -316,7 +317,7 @@ fn has_too_many_adjacent_joints(
             return true;
         }
     }
-    return false;
+    false
 }
 
 fn get_next_ball_position(
@@ -340,8 +341,7 @@ fn get_next_ball_position(
 
         // Perform the proximity query, excluding the parent collider
         let mut hit = false;
-        let mut filter = QueryFilter::default();
-        filter.exclude_collider = Some(exclude_entity);
+        let filter = QueryFilter { exclude_collider: Some(exclude_entity), ..Default::default() };
         rapier_context.intersect_shape(
             Vec2::new(new_ball_x, new_ball_y),
             angle,
@@ -355,7 +355,7 @@ fn get_next_ball_position(
     }
     None
 }
-
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn reproduce_balls(
     mut commands: Commands,
     rapier: bevy_rapier2d::prelude::ReadRapierContext,
@@ -486,25 +486,25 @@ struct NewBallsTimer(pub Timer);
 struct Box2D {
     min_x: f32,
     max_x: f32,
-    min_y: f32,
-    max_y: f32,
+    _min_y: f32,
+    _max_y: f32,
 }
 const SPAWN_BOX: Box2D = Box2D {
     min_x: (-0.5 * GROUND_WIDTH) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
     max_x: (0.5 * GROUND_WIDTH) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
-    // min_y: (-0.5 *   WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
-    min_y: (0.5 * WALL_HEIGHT) - (BALL_RADIUS * 4.0) - (0.5 * WALL_THICKNESS),
-    max_y: (0.5 * WALL_HEIGHT) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
+    // _min_y: (-0.5 *   WALL_HEIGHT) + (BALL_RADIUS * 2.0) + (0.5 * WALL_THICKNESS),
+    _min_y: (0.5 * WALL_HEIGHT) - (BALL_RADIUS * 4.0) - (0.5 * WALL_THICKNESS),
+    _max_y: (0.5 * WALL_HEIGHT) - (BALL_RADIUS * 2.0) - (0.5 * WALL_THICKNESS),
 };
 
 const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
 const MAX_LINEAR_VELOCITY: Vec2 = Vec2::new(1.0, 1.0);
 
 // Legacy constants retained for reference; live values come from PhysicsTuning
-const STICKY_MIN_FORCE: f32 = 0.05;
-const STICKY_CREATION_FORCE_MAX: f32 = 20.0;
-const STICKY_BREAKING_FORCE: f32 = 20.0;
-
+#[allow(dead_code)] const STICKY_MIN_FORCE: f32 = 0.05;
+const _STICKY_CREATION_FORCE_MAX: f32 = 20.0;
+const _STICKY_BREAKING_FORCE: f32 = 20.0;
+#[allow(clippy::too_many_arguments)]
 fn add_balls(
     time: Res<Time>,
     mut timer: ResMut<NewBallsTimer>,
@@ -603,7 +603,7 @@ fn has_more_than_max_joints(
         Ok(children) => children,
         Err(_) => return false,
     };
-    return children.len() > MAX_JOINTS;
+    children.len() > MAX_JOINTS
 }
 
 fn already_has_max_pairwise_joints(
@@ -629,9 +629,10 @@ fn already_has_max_pairwise_joints(
             }
         }
     }
-    return false;
+    false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn contacts(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -667,7 +668,7 @@ fn contacts(
 
 
         // Record stats before further filtering
-        let rel_speed = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
+        let _rel_speed = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
             (v1.linvel - v2.linvel).length()
         } else { 0.0 };
         // stats collection removed to reduce system params
@@ -769,12 +770,12 @@ fn contacts(
         }
 
         // There's only ever really one contact manifold for pure circles, just get the first.
-        let manifold = match contact_pair.manifolds().into_iter().next() {
+        let manifold = match contact_pair.manifolds().next() {
             Some(manifold) => manifold,
             None => continue,
         };
         // There's only ever really one point pair for pure circles, just get the first.
-        let contact_point = match manifold.points().into_iter().next() {
+        let contact_point = match manifold.points().next() {
             Some(contact_point) => contact_point,
             None => continue,
         };
@@ -782,7 +783,7 @@ fn contacts(
 
         // Relative velocity gate for joint creation
         let mut rel_ok = false;
-        let rel_len = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
+        let _rel_len = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
             let r = (v1.linvel - v2.linvel).length();
             rel_ok = r >= tuning.rel_vel_min && r <= tuning.rel_vel_max;
             r
@@ -870,8 +871,7 @@ fn contacts(
         }
     }
 }
-
-
+#[allow(clippy::too_many_arguments)]
 fn unstick(
     mut commands: Commands,
     rapier: bevy_rapier2d::prelude::ReadRapierContext,

@@ -18,7 +18,7 @@ opt-level = 3          # max speed (default in release, but make it explicit)
 lto = "fat"            # best cross-crate optimization (slower builds than "thin")
 codegen-units = 1      # enables more inlining across units (slower compile)
 panic = "abort"        # removes unwinding machinery (smaller & a bit faster)
-debug = 0              # no debug info (optional; size, not speed)
+# debug = 0              # no debug info (optional; size, not speed)
 incremental = false    # ensure full, non-incremental optimizations
 overflow-checks = false
 debug-assertions = false
@@ -47,4 +47,7 @@ serde = { version = "1.0.219", features = [
     "derive"
 ] }
 serde_json = "1.0.143"
+
+[dev-dependencies]
+tower = { version = "0.5.2", features = ["util"] }
 

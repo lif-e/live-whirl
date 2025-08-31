@@ -174,16 +174,16 @@ struct Box2D {
     max_x: f32,
     min_y: f32,
     max_y: f32,
-    min_z: f32,
-    max_z: f32,
+    _min_z: f32,
+    _max_z: f32,
 }
 const WALL_BOX: Box2D = Box2D {
     min_x: -0.5 * GROUND_WIDTH,
     max_x: 0.5 * GROUND_WIDTH,
     min_y: GROUND_POSITION,
     max_y: WALL_HEIGHT + GROUND_POSITION,
-    min_z: 0.0,
-    max_z: 0.0,
+    _min_z: 0.0,
+    _max_z: 0.0,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
