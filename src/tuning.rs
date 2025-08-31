@@ -427,6 +427,7 @@ fn build_router(tx: mpsc::Sender<PhysicsTuning>, mirror: Arc<Mutex<PhysicsTuning
         .with_state(state)
 }
 
+#[allow(dead_code)]
 pub fn build_router_for_test(tx: mpsc::Sender<PhysicsTuning>, mirror: Arc<Mutex<PhysicsTuning>>) -> Router {
     build_router(tx, mirror)
 }
