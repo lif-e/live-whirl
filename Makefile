@@ -8,12 +8,18 @@ LOG_GREP    := grep --line-buffered -E "\[diag\]|\[ffmpeg\]"
 # Usage: make [target]
 # Run `make help` to list available commands
 
-.PHONY: help build run-headless-video run-headless-video-build run-headless-video-build-release test fmt clippy clean
+.PHONY: help build run-headless-video run-headless-video-build run-headless-video-build-release run-headless-video-build-memory test fmt clippy clean
 
 # Configurable preview parameters
 UDP_HOST ?= 127.0.0.1
 UDP_PORT ?= 12345
 VIDEO_FPS ?= 60
+# Profiling/signing config
+BINARY_NAME := live-whirl
+ENTITLEMENTS_FILE ?= $(CURDIR)/ent.plist
+XCTRACE_TEMPLATE ?= Allocations
+ARGS ?=
+
 
 
 help:
@@ -22,6 +28,7 @@ help:
 	@echo "  run-headless-video      - Run headless with video export (writes MP4 via ffmpeg)"
 	@echo "  run-headless-video-build- Build then run headless+video with [diag] logs"
 	@echo "  run-headless-video-build-release - Build then run headless+video as release"
+	@echo "  run-headless-video-build-memory  - Build (release), sign with entitlements, and run Instruments Allocations"
 	@echo "  preview-udp             - Preview the UDP stream (env: UDP_HOST/UDP_PORT/VIDEO_FPS)"
 	@echo "  test                    - Run cargo tests"
 	@echo "  fmt                     - Format code with rustfmt"
@@ -53,6 +60,30 @@ test:
 
 fmt:
 	cargo fmt --all
+
+# Build (release), codesign with entitlement, and run Instruments Allocations
+run-headless-video-build-memory:
+	@set -euo pipefail; \
+	echo "Building release..."; \
+	cargo build --release; \
+	BIN_PATH="target/release/$(BINARY_NAME)"; \
+	if [ ! -f "$(ENTITLEMENTS_FILE)" ]; then \
+	  echo "Creating entitlements at $(ENTITLEMENTS_FILE)"; \
+	  printf '%s\n' \
+	    '<?xml version="1.0" encoding="UTF-8"?>' \
+	    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+	    '<plist version="1.0">' \
+	    '    <dict>' \
+	    '        <key>com.apple.security.get-task-allow</key>' \
+	    '        <true/>' \
+	    '    </dict>' \
+	    '</plist>' >"$(ENTITLEMENTS_FILE)"; \
+	fi; \
+	echo "Codesigning $$BIN_PATH with entitlements"; \
+	codesign -s - -f --entitlements "$(ENTITLEMENTS_FILE)" "$$BIN_PATH"; \
+	echo "Launching Instruments (template: $(XCTRACE_TEMPLATE))"; \
+	xcrun xctrace record --template '$(XCTRACE_TEMPLATE)' --output xctrace-allocations.trace --launch -- "$$BIN_PATH" $(ARGS)
+
 
 clippy:
 	cargo clippy -- -D warnings

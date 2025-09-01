@@ -120,100 +120,6 @@ struct BallAndJointLoopTimer(pub Timer);
 #[derive(Resource, Default)]
 struct FrameCounter{ frame:u64 }
 
-#[derive(Resource, Default)]
-struct JointStats{
-    created:u64,
-    broke_1:u64,
-    broke_5:u64,
-    broke_30:u64,
-}
-
-#[derive(Resource, Default)]
-struct CollisionStats {
-    samples: u64,
-    force_min: f32,
-    force_max: f32,
-    force_sum: f32,
-    rel_min: f32,
-    rel_max: f32,
-    rel_sum: f32,
-    // Simple histograms for approximate percentiles
-    force_bins: [u64; 12],
-    rel_bins: [u64; 12],
-}
-
-#[allow(dead_code)]
-impl CollisionStats {
-    const FORCE_EDGES: [f32; 12] = [0.1, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 24.0, 32.0, f32::INFINITY];
-    const REL_EDGES: [f32; 12] = [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, f32::INFINITY];
-
-    fn add(&mut self, force_disp: f32, rel_disp: f32) {
-        self.samples += 1;
-        if self.samples == 1 {
-            self.force_min = force_disp;
-            self.force_max = force_disp;
-            self.rel_min = rel_disp;
-            self.rel_max = rel_disp;
-        } else {
-            self.force_min = self.force_min.min(force_disp);
-            self.force_max = self.force_max.max(force_disp);
-            self.rel_min = self.rel_min.min(rel_disp);
-            self.rel_max = self.rel_max.max(rel_disp);
-        }
-        self.force_sum += force_disp;
-        self.rel_sum += rel_disp;
-        // binning
-        for (i, edge) in Self::FORCE_EDGES.iter().enumerate() {
-            if force_disp <= *edge {
-                self.force_bins[i] += 1;
-                break;
-            }
-        }
-        for (i, edge) in Self::REL_EDGES.iter().enumerate() {
-            if rel_disp <= *edge {
-                self.rel_bins[i] += 1;
-                break;
-            }
-        }
-    }
-
-    fn percentile_from_bins(bins: &[u64], edges: &[f32], p: f32) -> f32 {
-        let total: u64 = bins.iter().sum();
-        if total == 0 { return 0.0; }
-        let target = (p * total as f32).ceil() as u64;
-        let mut acc = 0u64;
-        for (i, count) in bins.iter().enumerate() {
-            acc += *count;
-            if acc >= target {
-                return edges[i];
-            }
-        }
-        edges[edges.len() - 1]
-    }
-
-    fn snapshot_and_reset(&mut self) -> (u64, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
-        let n = self.samples;
-        let avg_force = if n > 0 { self.force_sum / n as f32 } else { 0.0 };
-        let avg_rel = if n > 0 { self.rel_sum / n as f32 } else { 0.0 };
-        let min_f = self.force_min;
-        let max_f = self.force_max;
-        let min_r = self.rel_min;
-        let max_r = self.rel_max;
-        let p50_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.50);
-        let p90_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.90);
-        let p99_f = Self::percentile_from_bins(&self.force_bins, &Self::FORCE_EDGES, 0.99);
-        let p50_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.50);
-        let p90_r = Self::percentile_from_bins(&self.rel_bins, &Self::REL_EDGES, 0.90);
-
-        // reset
-        *self = CollisionStats::default();
-        (n, avg_force, min_f, max_f, p50_f, p90_f, p99_f, avg_rel, min_r, max_r, p50_r, p90_r)
-    }
-}
-
-#[derive(Resource)]
-struct CollisionStatsLogTimer(pub Timer);
-
 #[derive(Component)]
 struct JointBorn{ frame:u64 }
 
@@ -470,6 +376,8 @@ fn reproduce_balls(
                     angvel: 0.0,
                 },
                 ActiveEvents::CONTACT_FORCE_EVENTS,
+                // If available, per-collider event threshold could be inserted here
+                // ContactForceEventThreshold(threshold_force),
                 Restitution::new(0.1),
                 Transform::from_xyz(new_ball_x, new_ball_y, 0.0),
                 GlobalTransform::default(),
@@ -501,9 +409,6 @@ const MIN_LINEAR_VELOCITY: Vec2 = Vec2::new(-1.0, -1.0);
 const MAX_LINEAR_VELOCITY: Vec2 = Vec2::new(1.0, 1.0);
 
 // Legacy constants retained for reference; live values come from PhysicsTuning
-#[allow(dead_code)] const STICKY_MIN_FORCE: f32 = 0.05;
-const _STICKY_CREATION_FORCE_MAX: f32 = 20.0;
-const _STICKY_BREAKING_FORCE: f32 = 20.0;
 #[allow(clippy::too_many_arguments)]
 fn add_balls(
     time: Res<Time>,
@@ -581,6 +486,8 @@ fn add_balls(
                 angvel: 0.0,
             },
             ActiveEvents::CONTACT_FORCE_EVENTS,
+            // If available, per-collider event threshold could be inserted here
+            // ContactForceEventThreshold(threshold_force),
             Restitution::new(0.1),
             Transform::from_xyz(x, y, 0.0),
             GlobalTransform::default(),
@@ -650,7 +557,6 @@ fn contacts(
     q_is_ball: Query<(), With<Ball>>,
     q_existing_markers: Query<(&Transform, &ForceMarker)>,
     frame_counter: ResMut<FrameCounter>,
-    mut joint_stats: ResMut<JointStats>,
     tuning: Res<crate::tuning::PhysicsTuning>,
 ) {
     let Ok(ctx) = rapier.single() else { return; };
@@ -666,12 +572,9 @@ fn contacts(
         let collider2 = *collider2;
         let force = *total_force_magnitude;
 
-
-        // Record stats before further filtering
         let _rel_speed = if let Ok([v1, v2]) = q_velocities.get_many([collider1, collider2]) {
             (v1.linvel - v2.linvel).length()
         } else { 0.0 };
-        // stats collection removed to reduce system params
 
         // Filter: only show markers for ball-to-ball collisions
         let is_ball1 = q_is_ball.get(collider1).is_ok();
@@ -844,7 +747,6 @@ fn contacts(
                 JointBorn { frame: frame_counter.frame },
             ))
             .id();
-        joint_stats.created += 1;
         commands.entity(collider2).add_child(joint_entity);
         eprintln!("[diag] joint_create ok between {:?} and {:?} (child {:?})", collider1, collider2, joint_entity);
         // Green label for successful stick
@@ -888,7 +790,6 @@ fn unstick(
     q_existing_markers: Query<(&Transform, &ForceMarker)>,
     frame_counter: ResMut<FrameCounter>,
 
-    mut joint_stats: ResMut<JointStats>,
     tuning: Res<crate::tuning::PhysicsTuning>,
 
 ) {
@@ -909,12 +810,6 @@ fn unstick(
                 let impulse_magnitude: f32 = Vec2::new(impulse.x, impulse.y).length();
                 if impulse_magnitude > tuning.break_force_threshold {
                     eprintln!("[diag] joint_break impulse={impulse_magnitude:.6}");
-                    if let Ok(born) = q_joint_born.get(*bevy_impulse_joint_entity) {
-                        let age = frame_counter.frame.saturating_sub(born.frame);
-                        if age <= 1 { joint_stats.broke_1 += 1; }
-                        if age <= 5 { joint_stats.broke_5 += 1; }
-                        if age <= 30 { joint_stats.broke_30 += 1; }
-                    }
                     if tuning.show_break_labels && impulse_magnitude >= tuning.break_label_impulse_min {
                         // Spawn red marker at the parent ball's transform (joint entity has no Transform)
                         // Stack above nearby markers at the parent ball's position
@@ -955,28 +850,10 @@ impl Plugin for BallPlugin {
             .insert_resource(ReproduceBallsTimer(Timer::from_seconds(0.025, TimerMode::Repeating)))
             .insert_resource(BallAndJointLoopTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
             .insert_resource(FrameCounter::default())
-            .insert_resource(JointStats::default())
-            .insert_resource(CollisionStats::default())
-            .insert_resource(CollisionStatsLogTimer(Timer::from_seconds(1.0, TimerMode::Repeating)))
             .add_systems(Update, (add_balls, reproduce_balls))
             .add_systems(Update, contacts)
             .add_systems(Update, unstick)
             .add_systems(Update, update_force_markers)
-            .add_systems(Update, collision_stats_logger)
             .add_systems(Update, update_life_points);
     }
 }
-
-fn collision_stats_logger(
-    time: Res<Time>,
-    mut timer: ResMut<CollisionStatsLogTimer>,
-    mut stats: ResMut<CollisionStats>,
-) {
-    if !timer.0.tick(time.delta()).just_finished() { return; }
-    let (n, avg_f, min_f, max_f, p50_f, p90_f, p99_f, avg_r, min_r, max_r, p50_r, p90_r) = stats.snapshot_and_reset();
-    if n > 0 {
-        eprintln!("[diag] collisions stats: n={n} force avg={avg_f:.2} min={min_f:.2} max={max_f:.2} p50={p50_f:.2} p90={p90_f:.2} p99={p99_f:.2} | rel avg={avg_r:.2} min={min_r:.2} max={max_r:.2} p50={p50_r:.2} p90={p90_r:.2}");
-    }
-}
-
-

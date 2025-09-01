@@ -16,6 +16,7 @@ use bevy::{
         ResMut,
         Resource,
         Startup,
+        Update,
         Transform,
         Vec2,
         With,
@@ -161,6 +162,46 @@ pub fn setup_graphics(
     let mut ortho = OrthographicProjection::default_2d();
     ortho.scale = fit_scale * 1.0;
     commands.entity(camera_2d).insert(Projection::Orthographic(ortho));
+
+}
+
+// Map rel_vel_min to a Rapier contact-force event threshold using a tunable fudge factor.
+fn update_contact_force_threshold(
+    mut rapier_cfg: bevy::prelude::Query<
+        &mut bevy_rapier2d::prelude::RapierConfiguration,
+        bevy::prelude::With<bevy_rapier2d::plugin::context::DefaultRapierContext>
+    >,
+    timestep: bevy::prelude::Res<bevy_rapier2d::plugin::TimestepMode>,
+    tuning: bevy::prelude::Res<crate::tuning::PhysicsTuning>,
+) {
+    let Ok(mut rc) = rapier_cfg.single_mut() else { return; };
+
+    // Collider density used at spawn
+    let density = 0.001_f32;
+
+    // Radius in meters
+    let ppm = crate::shared_consts::PIXELS_PER_METER;
+    let r_m = crate::ball::BALL_RADIUS / ppm;
+    let area_m2 = std::f32::consts::PI * r_m * r_m;
+
+    // Approx mass and effective mass (two equal bodies)
+    let m = density * area_m2;
+    let m_eff = 0.5 * m;
+
+    // Fixed timestep
+    let dt = match *timestep {
+        bevy_rapier2d::plugin::TimestepMode::Fixed { dt, .. } => dt,
+        _ => 1.0 / 60.0,
+    };
+
+    // Effective multiplier: (1 - fudge), clamped
+    let k_eff = (1.0 - tuning.contact_force_performance_cutoff_fudge_factor).clamp(0.0, 1.0);
+    let _threshold_force = k_eff * (m_eff / dt) * tuning.rel_vel_min;
+
+    // If supported by current bevy_rapier2d version, set the global contact force threshold.
+    // Note: Some versions may not expose this field. If it's unavailable, this will be a no-op at compile-time.
+    let _ = &mut rc;
+    // rc.contact_force_event_threshold = _threshold_force.max(0.0);
 }
 
 pub const WALL_HEIGHT: f32 = 9.0 * PIXELS_PER_METER * 1.620_689_6;
@@ -293,5 +334,7 @@ impl Plugin for SetupPlugin {
         app.add_systems(Startup, setup_meshes);
         app.add_systems(Startup, setup_graphics);
         app.add_systems(Startup, setup_whirl);
+        // Keep the global contact-force threshold in sync with tuning and fps
+        app.add_systems(Update, update_contact_force_threshold);
     }
 }

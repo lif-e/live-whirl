@@ -22,6 +22,9 @@ pub struct ApiTuning {
 pub struct ApiStickiness {
     pub stick_range: ApiStickRange,
     pub break_threshold: f32,
+    // Used to derive a Rapier contact force event threshold from rel_vel_min
+    // Effective multiplier = (1.0 - contact_force_performance_cutoff_fudge_factor)
+    pub contact_force_performance_cutoff_fudge_factor: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiStickRange { pub rel_vel_min: f32, pub rel_vel_max: f32 }
@@ -104,7 +107,7 @@ pub struct ApiTuningUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ApiStickinessUpdate { pub stick_range: Option<ApiStickRangeUpdate>, pub break_threshold: Option<f32> }
+pub struct ApiStickinessUpdate { pub stick_range: Option<ApiStickRangeUpdate>, pub break_threshold: Option<f32>, pub contact_force_performance_cutoff_fudge_factor: Option<f32> }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApiStickRangeUpdate { pub rel_vel_min: Option<f32>, pub rel_vel_max: Option<f32> }
 
@@ -175,6 +178,7 @@ impl ApiTuningUpdate {
                 if let Some(v) = sr.rel_vel_max { t.rel_vel_max = v; }
             }
             if let Some(v) = st.break_threshold { t.break_force_threshold = v; }
+            if let Some(v) = st.contact_force_performance_cutoff_fudge_factor { t.contact_force_performance_cutoff_fudge_factor = v; }
         }
         if let Some(es) = self.energy_share {
             if let Some(v) = es.energy_transfer_enabled { t.energy_transfer_enabled = v; }
@@ -251,7 +255,11 @@ impl ApiTuningUpdate {
 impl From<&PhysicsTuning> for ApiTuning {
     fn from(t: &PhysicsTuning) -> Self {
         ApiTuning {
-            stickiness: ApiStickiness { stick_range: ApiStickRange { rel_vel_min: t.rel_vel_min, rel_vel_max: t.rel_vel_max }, break_threshold: t.break_force_threshold },
+            stickiness: ApiStickiness {
+                stick_range: ApiStickRange { rel_vel_min: t.rel_vel_min, rel_vel_max: t.rel_vel_max },
+                break_threshold: t.break_force_threshold,
+                contact_force_performance_cutoff_fudge_factor: t.contact_force_performance_cutoff_fudge_factor,
+            },
             energy_share: ApiEnergyShare {
                 energy_transfer_enabled: t.energy_transfer_enabled,
                 energy_share_diff_threshold: t.energy_share_diff_threshold,
@@ -285,6 +293,7 @@ impl From<ApiTuning> for PhysicsTuning {
             rel_vel_min: api.stickiness.stick_range.rel_vel_min,
             rel_vel_max: api.stickiness.stick_range.rel_vel_max,
             break_force_threshold: api.stickiness.break_threshold,
+            contact_force_performance_cutoff_fudge_factor: api.stickiness.contact_force_performance_cutoff_fudge_factor,
             energy_transfer_enabled: api.energy_share.energy_transfer_enabled,
             energy_share_diff_threshold: api.energy_share.energy_share_diff_threshold,
             energy_share_friendly_rate: api.energy_share.energy_share_friendly_rate,
@@ -328,6 +337,9 @@ pub struct PhysicsTuning {
     pub rel_vel_max: f32,
     // Breaking threshold (raw Rapier impulse units for joints)
     pub break_force_threshold: f32,
+    // Performance cutoff fudge factor for mapping rel_vel_min -> contact force threshold
+    // Effective multiplier used = (1.0 - contact_force_performance_cutoff_fudge_factor)
+    pub contact_force_performance_cutoff_fudge_factor: f32,
     // Energy transfer and bite behavior between stuck pairs
     pub energy_transfer_enabled: bool,
     pub energy_share_diff_threshold: u32,
@@ -427,6 +439,7 @@ fn build_router(tx: mpsc::Sender<PhysicsTuning>, mirror: Arc<Mutex<PhysicsTuning
         .with_state(state)
 }
 
+// Used by tests, not actually dead code.
 #[allow(dead_code)]
 pub fn build_router_for_test(tx: mpsc::Sender<PhysicsTuning>, mirror: Arc<Mutex<PhysicsTuning>>) -> Router {
     build_router(tx, mirror)
@@ -521,6 +534,7 @@ mod tests {
             stickiness: Some(ApiStickinessUpdate {
                 stick_range: Some(ApiStickRangeUpdate { rel_vel_min: Some(1.23), rel_vel_max: None }),
                 break_threshold: Some(42.0),
+                contact_force_performance_cutoff_fudge_factor: Some(0.00001),
             }),
             labels: Some(ApiLabelsUpdate {
                 collision: Some(ApiCollisionLabelsUpdate { show_collision_labels: Some(true), collision_label_force_min: Some(3.3) }),

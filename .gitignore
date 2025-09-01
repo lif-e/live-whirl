@@ -17,3 +17,6 @@ frame_*
 
 # Logs
 run.log
+
+# XCode Traces
+xctrace-*
