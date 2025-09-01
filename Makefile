@@ -11,6 +11,7 @@ LOG_GREP    := grep --line-buffered -E "\[diag\]|\[ffmpeg\]"
 .PHONY: help build run-headless-video run-headless-video-build run-headless-video-build-release run-headless-video-build-memory test fmt clippy clean
 
 # Configurable preview parameters
+# Comma-separated list of hosts to send the UDP preview to
 UDP_HOST ?= 127.0.0.1
 UDP_PORT ?= 12345
 VIDEO_FPS ?= 60
@@ -29,7 +30,7 @@ help:
 	@echo "  run-headless-video-build- Build then run headless+video with [diag] logs"
 	@echo "  run-headless-video-build-release - Build then run headless+video as release"
 	@echo "  run-headless-video-build-memory  - Build (release), sign with entitlements, and run Instruments Allocations"
-	@echo "  preview-udp             - Preview the UDP stream (env: UDP_HOST/UDP_PORT/VIDEO_FPS)"
+	@echo "  preview-udp             - Preview the UDP stream (env: UDP_HOST (comma-separated)/UDP_PORT/VIDEO_FPS)"
 	@echo "  test                    - Run cargo tests"
 	@echo "  fmt                     - Format code with rustfmt"
 	@echo "  clippy                  - Lint with Clippy (warnings as errors)"
@@ -50,7 +51,7 @@ run-headless-video-build run-headless-video-build-release:
 	@set -euo pipefail; \
 	echo "Build + run headless+video $(if $(PROFILE),release,with diagnostics)"; \
 	cargo build $(PROFILE); \
-	echo "Launching... UDP=$(UDP_HOST):$(UDP_PORT)"; \
+        echo "Launching... UDP hosts $(UDP_HOST) port $(UDP_PORT)"; \
 	UDP_HOST="$(UDP_HOST)" UDP_PORT="$(UDP_PORT)" VIDEO_EXPORT=1 \
 	$(if $(PROFILE),$(ENV_RELEASE),) \
 	RUST_BACKTRACE=full cargo run $(PROFILE) 2>&1 | tee run.log | $(LOG_GREP) || true
