@@ -316,11 +316,9 @@ fn reproduce_balls(
                 }
                 None => {
                     // Probe failed; count as congestion signal and skip
-                    eprintln!("[diag] reproduce probe failed near ({x:.1},{y:.1})");
                     continue;
                 }
             };
-        // println!("{:#?}", world.inspect_entity(entity));
 
         let linearvelocity: Vec2 =
             Vec2::new(parent_ball_velocity.linvel.x, parent_ball_velocity.linvel.y);
